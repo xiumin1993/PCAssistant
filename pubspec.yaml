@@ -1,0 +1,34 @@
+name: pc_speaker
+description: "PC Speaker - 将手机变成电脑音箱，实时同步播放电脑音频"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # 状态管理
+  provider: ^6.1.2
+
+  # 网络通信 - WebSocket 用于实时音频流传输
+  web_socket_channel: ^3.0.1
+
+  # 音频播放
+  just_audio: ^0.9.40
+
+  # 本地存储 - 保存连接配置
+  shared_preferences: ^2.3.3
+
+  # 日志
+  logger: ^2.4.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

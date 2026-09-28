@@ -1,0 +1,135 @@
+# ================================
+# PC Assistant - Git Ignore
+# ================================
+
+# --------------------------------
+# 通用 / Miscellaneous
+# --------------------------------
+*.class
+*.log
+*.pyc
+*.swp
+*.bak
+*.tmp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+Thumbs.db
+desktop.ini
+
+# --------------------------------
+# IDE / 编辑器
+# --------------------------------
+# IntelliJ / Android Studio
+*.iml
+*.ipr
+*.iws
+.idea/
+.vscode/
+
+# --------------------------------
+# Flutter / Dart / Pub
+# --------------------------------
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+.widget_preview/
+
+# Symbolication & Obfuscation
+app.*.symbols
+app.*.map.json
+
+# Android Studio build artifacts
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# --------------------------------
+# Android 构建产物
+# --------------------------------
+android/.gradle/
+android/captures/
+android/gradlew
+android/gradlew.bat
+android/local.properties
+android/GeneratedPluginRegistrant.java
+android/.cxx/
+android/gradle-wrapper.jar
+
+# Android 签名密钥（绝对不要提交）
+key.properties
+**/*.keystore
+**/*.jks
+
+# --------------------------------
+# iOS 构建产物
+# --------------------------------
+ios/**/dgph
+ios/**/*.mode1v3
+ios/**/*.mode2v3
+ios/**/*.moved-aside
+ios/**/*.pbxuser
+ios/**/*.perspectivev3
+ios/**/*sync/
+ios/**/.sconsign.dblite
+ios/**/.tags*
+ios/**/.vagrant/
+ios/**/DerivedData/
+ios/Icon?
+ios/**/Pods/
+ios/**/.symlinks/
+ios/profile
+ios/xcuserdata
+ios/**/.generated/
+ios/Flutter/App.framework
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/Generated.xcconfig
+ios/Flutter/ephemeral/
+ios/Flutter/app.flx
+ios/Flutter/app.zip
+ios/Flutter/flutter_assets/
+ios/Flutter/flutter_export_environment.sh
+ios/ServiceDefinitions.json
+ios/Runner/GeneratedPluginRegistrant.*
+
+# iOS 例外规则（保留默认配置）
+!ios/default.mode1v3
+!ios/default.mode2v3
+!ios/default.pbxuser
+!ios/default.perspectivev3
+
+# --------------------------------
+# 其他平台构建产物（未来扩展）
+# --------------------------------
+windows/runner/flutter_window.cpp
+windows/runner/win32_app.cpp
+linux/flutter/generated_*
+macos/Flutter/GeneratedPluginRegistrant.*
+
+# --------------------------------
+# 日志 & 缓存
+# --------------------------------
+*.log
+logs/
+.cache/
+__pycache__/
+node_modules/
+
+# --------------------------------
+# 敏感信息（可选）
+# --------------------------------
+.env
+.env.local
+*.pem
+*.key
