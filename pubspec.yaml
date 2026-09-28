@@ -16,7 +16,7 @@ dependencies:
   # 网络通信 - WebSocket 用于实时音频流传输
   web_socket_channel: ^3.0.1
 
-  # 音频播放
+  # 音频播放 - 支持流式/文件音频（代码中实际使用其 AudioPlayer API）
   just_audio: ^0.9.40
 
   # 本地存储 - 保存连接配置
