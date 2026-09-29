@@ -355,7 +355,9 @@ class CameraProvider extends ChangeNotifier {
 
   /// 从能力清单里给当前镜头挑"最高档"：
   /// 面积最大的一档；帧率取 min(该档最高帧率, 30) —— 网络场景 30fps 封顶。
+  /// v3.4.4：手动模式下如果手动档在新镜头上也受支持，就保持手动档不动。
   void _pickBestProfile() {
+    if (!_autoProfile && _manualProfileSupportedHere()) return;
     CamLensCaps? lens;
     for (final c in _caps) {
       if (c.facing == _facing) lens = c;
@@ -365,6 +367,84 @@ class CameraProvider extends ChangeNotifier {
     _selWidth = best.width;
     _selHeight = best.height;
     _selFps = best.maxFps.clamp(1, 30);
+    _autoProfile = true; // 手动档在当前镜头上不存在 → 回退自动
+  }
+
+  // ── v3.4.4 手动画质档 ──────────────────────────────────────────
+  // true  = 自动挑选（能力探测后取最高档，原有行为）
+  // false = 用户在界面上手动指定的档位
+  bool _autoProfile = true;
+
+  /// 当前镜头支持的全部分辨率档位（给界面下拉框用）
+  List<CamSizeCaps> get lensSizes {
+    for (final c in _caps) {
+      if (c.facing == _facing) return c.sizes;
+    }
+    return const []; // 还没探测到能力时返回空列表，界面据此禁用选择器
+  }
+
+  /// 是否处于"自动挑档"模式
+  bool get autoProfile => _autoProfile;
+
+  /// 手动档（宽×高）在当前镜头的能力清单里是否存在。
+  /// 用途：前后置镜头能力不同，切镜头时手动档可能要"作废"回自动。
+  bool _manualProfileSupportedHere() {
+    for (final c in _caps) {
+      if (c.facing != _facing) continue;
+      for (final s in c.sizes) {
+        if (s.width == _selWidth && s.height == _selHeight) return true;
+      }
+    }
+    return false;
+  }
+
+  /// 用户手动选择某一档：帧率自动取该档上限（封顶 30fps）
+  Future<void> selectProfile(CamSizeCaps size) async {
+    if (_selWidth == size.width && _selHeight == size.height && !_autoProfile) {
+      return; // 没变化，不折腾相机
+    }
+    _autoProfile = false;
+    _selWidth = size.width;
+    _selHeight = size.height;
+    _selFps = size.maxFps.clamp(1, 30);
+    await _applyProfileChange();
+  }
+
+  /// 恢复"自动挑最高档"模式
+  Future<void> setAutoProfile() async {
+    if (_autoProfile) return;
+    _autoProfile = true;
+    _pickBestProfile();
+    await _applyProfileChange();
+  }
+
+  /// 画质档变化后的统一善后：
+  /// live 状态 → 重启相机硬件套用新档；standby → 重发 cam_start 更新登记；
+  /// idle → 什么都不用做（下次进待命会用新档）。
+  Future<void> _applyProfileChange() async {
+    notifyListeners();
+    if (_state == CamState.live) {
+      await _cameraService.stop();
+      final error = await _cameraService.start(
+        facing: _facing,
+        width: _selWidth,
+        height: _selHeight,
+        fps: _selFps,
+      );
+      if (error != null) {
+        _errorMessage = _errorText(error);
+        _state = CamState.standby; // 起不来就退回待命，不算致命
+      }
+    } else if (_state != CamState.idle) {
+      _networkService.send(jsonEncode({
+        'type': 'cam_start',
+        'facing': _facing,
+        'width': _selWidth,
+        'height': _selHeight,
+        'fps': _selFps,
+      }));
+    }
+    notifyListeners();
   }
 
   /// 打开相机硬件并开始上行（只在 PC 正在观看 & 未冻结时被调用）

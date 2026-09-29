@@ -58,6 +58,38 @@ class MicProvider extends ChangeNotifier {
   bool _sessionEstablished = false; // 服务器已确认登记（收到 mic_ack）
   bool _serverLive = false; // PC 是否有应用正在录 CABLE Output（服务器的权威判断）
   bool _muted = false;      // 手动静音键：按下后即使电脑在用也不开麦
+
+  // ── v3.4.4 上行采样率选项 ──────────────────────────────────────
+  // 48000（默认）= 与 PC 声卡混音速率一致，服务器逐样本直通（零风险）；
+  // 44100 = 手机按 44.1k 录音上行，服务器注入引擎自动线性插值重采样到 48k。
+  // 改档即时生效：正在录音会静默重启采集，待命中只更新登记信息。
+  int _sampleRate = 48000;
+  int get sampleRate => _sampleRate;
+
+  /// 可选的采样率档位（AudioRecord 对两者都有硬性保证支持）
+  static const List<int> sampleRateChoices = [48000, 44100];
+
+  /// 切换上行采样率
+  Future<void> setSampleRate(int sr) async {
+    if (sr == _sampleRate) return;
+    _sampleRate = sr;
+    notifyListeners();
+    if (_state == MicState.live) {
+      // 正在上行：关硬件 → 用新速率重开（用户几乎无感，约 100ms 静音间隙）
+      await _closeMic();
+      if (_serverLive && !_muted) {
+        await _openMic();
+      }
+    } else if (_state != MicState.idle && _sessionEstablished) {
+      // 待命：重新登记一次，让服务器知道新速率
+      _networkService.send(jsonEncode({
+        'type': 'mic_start',
+        'sample_rate': _sampleRate,
+        'channels': 1,
+        'format': 'pcm_s16le',
+      }));
+    }
+  }
   bool _needsPermission = false; // 连接了但缺录音权限 → 首页显示"启用"按钮
   String? _errorMessage;    // 可空：null = 当前无错误
 
@@ -234,7 +266,7 @@ class MicProvider extends ChangeNotifier {
     // 登记会话：告诉 AudioServer "我上线了，需要我时推 mic_state 唤醒"
     _networkService.send(jsonEncode({
       'type': 'mic_start',
-      'sample_rate': 48000,
+      'sample_rate': _sampleRate, // v3.4.4：跟随用户选择（默认 48000）
       'channels': 1,
       'format': 'pcm_s16le',
     }));
@@ -264,8 +296,9 @@ class MicProvider extends ChangeNotifier {
       return;
     }
 
-    // 开原生采集（48kHz 单声道，与 PC 端 mix 格式匹配）
-    final error = await _micService.start(sampleRate: 48000, channels: 1);
+    // 开原生采集（采样率跟随用户选择，单声道；44.1k 时服务器自动重采样）
+    final error = await _micService.start(
+        sampleRate: _sampleRate, channels: 1);
     if (error != null) {
       _state = MicState.standby; // 开麦失败退回待命，等下一次唤醒再试
       _errorMessage = _errorText(error);

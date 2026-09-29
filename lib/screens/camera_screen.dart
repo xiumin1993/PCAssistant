@@ -95,7 +95,63 @@ class CameraScreen extends StatelessWidget {
                     ],
                   ),
 
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 16),
+
+                  // ============ ②.5 清晰度选择行（v3.4.4）============
+                  // 下拉框内容 = 手机能力探测出来的真实档位（不是拍脑袋列举）。
+                  // "自动"= 取该镜头最高档（原有行为）；手动档立即重启相机套用。
+                  // 未启用（idle）或还没探测到能力时整个选择器禁用/隐藏。
+                  if (state != CamState.idle && provider.lensSizes.isNotEmpty)
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Text('清晰度',
+                            style: TextStyle(color: Colors.black54)),
+                        const SizedBox(width: 8),
+                        DropdownButton<String>(
+                          value: provider.autoProfile
+                              ? 'auto'
+                              : '${provider.qualityText}',
+                          // 当前档位文字（qualityText 由 provider 拼接）
+                          items: [
+                            // 第一项固定是"自动"，括注自动现在挑的档
+                            const DropdownMenuItem(
+                              value: 'auto',
+                              child: Text('自动（最高档）'),
+                            ),
+                            // 后面每一项来自能力探测清单
+                            for (final s in provider.lensSizes)
+                              DropdownMenuItem(
+                                value: '${s.width}×${s.height} @ ${s.maxFps.clamp(1, 30)}fps',
+                                child: Text(
+                                  '${s.width}×${s.height} @ ${s.maxFps.clamp(1, 30)}fps',
+                                  style: const TextStyle(fontSize: 14),
+                                ),
+                              ),
+                          ],
+                          onChanged: (v) {
+                            if (v == null) return;
+                            if (v == 'auto') {
+                              provider.setAutoProfile();
+                            } else {
+                              // 从 "宽×高 @ Nfps" 反解出宽高，再找回档位对象
+                              final parts =
+                                  v.replaceAll(RegExp(r'[^0-9×]'), '').split('×');
+                              final w = int.tryParse(parts[0]) ?? 0;
+                              final h = int.tryParse(parts[1]) ?? 0;
+                              final match = provider.lensSizes
+                                  .where((s) => s.width == w && s.height == h)
+                                  .toList();
+                              if (match.isNotEmpty) {
+                                provider.selectProfile(match.first);
+                              }
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+
+                  const SizedBox(height: 16),
 
                   // ============ ③ 大圆形状态按钮 ============
                   Material(

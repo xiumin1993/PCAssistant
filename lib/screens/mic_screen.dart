@@ -181,9 +181,37 @@ class MicScreen extends StatelessWidget {
                           horizontal: 16, vertical: 8),
                       child: Column(
                         children: [
+                          // v3.4.4：采样率从"死文案"升级为可点下拉框。
+                          // 48k = 与电脑声卡一致、服务器逐样本直通（默认推荐）；
+                          // 44.1k = 部分录音 App/声卡的常见档，服务器自动重采样。
+                          // 切换即时生效（正在录音会有约 100ms 的静默重启间隙）。
+                          Row(
+                            children: [
+                              const Expanded(
+                                child: Text('采样率',
+                                    style: TextStyle(color: Colors.black54)),
+                              ),
+                              DropdownButton<int>(
+                                value: provider.sampleRate,
+                                items: const [
+                                  DropdownMenuItem(
+                                    value: 48000,
+                                    child: Text('48 kHz · 直通'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: 44100,
+                                    child: Text('44.1 kHz · PC 重采样'),
+                                  ),
+                                ],
+                                onChanged: (v) {
+                                  if (v != null) provider.setSampleRate(v);
+                                },
+                              ),
+                            ],
+                          ),
                           _InfoRow(
-                            label: '采样率',
-                            value: '48 kHz · 单声道',
+                            label: '声道',
+                            value: '单声道',
                           ),
                           _InfoRow(
                             label: '回声消除',
