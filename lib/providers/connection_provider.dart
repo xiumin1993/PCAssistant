@@ -43,12 +43,13 @@ class ConnectionProvider extends ChangeNotifier {
   final AudioService _audioService;
 
   // --------------------------------------------------------------------------
-  // 三个订阅句柄。
+  // 四个订阅句柄。
   // 规则：凡是 listen() 了就必须记住，并在 dispose() 时 cancel()，
   // 否则对象销毁后回调仍被触发 → 内存泄漏 / 操作已销毁对象报错。
   // --------------------------------------------------------------------------
   StreamSubscription? _statusSubscription; // 订阅"连接状态变化"
   StreamSubscription? _audioSubscription;  // 订阅"音频字节到达"
+  StreamSubscription? _configSubscription; // 订阅"音频配置到达"
   StreamSubscription? _errorSubscription;  // 订阅"错误发生"
 
   // --------------------------------------------------------------------------
@@ -103,35 +104,37 @@ class ConnectionProvider extends ChangeNotifier {
   }
 
   /// 建立"接线"：把两个服务的输出流接到本类的处理逻辑上。
-  /// 这一步决定了整个 App 的自动化行为 —— 用户点一下连接后，
-  /// 后续所有状态联动都由这里驱动。
   void _setupListeners() {
     // 【监听 1：连接状态变化】
     _statusSubscription = _networkService.connectionStatusStream.listen((status) {
-      // 同步内部状态副本
       _connectionStatus = status;
-      // 只有"连接中"才显示 loading 转圈，其余状态按钮可点
       _isLoading = status == ConnectionStatus.connecting;
 
-      // 业务联动：连接状态变化时自动开关音频流
-      // —— 这就是为什么需要中间层：网络服务不该知道音频服务的存在。
       if (status == ConnectionStatus.connected) {
-        _audioService.startStreaming();   // 连上了 → 音频开始缓冲
+        _audioService.startStreaming();
       } else if (status == ConnectionStatus.disconnected) {
-        _audioService.stopStreaming();    // 断了 → 清理音频现场
+        _audioService.stopStreaming();
       }
 
-      notifyListeners(); // 关键！没有这句，上面的赋值界面根本看不到
+      notifyListeners();
     });
 
     // 【监听 2：音频数据到达】
-    // 网络层每收到一帧字节 → 原样转交音频层缓冲。
-    // 这里没做加工，纯粹是"数据搬运"接线。
     _audioSubscription = _networkService.audioDataStream.listen((data) {
+      // 【性能优化】移除了每包日志。音频包每秒约 100 个，
+      // 即使节流也不需要在生产环境打印。
       _audioService.receiveAudioData(data);
     });
 
-    // 【监听 3：错误发生】
+    // 【监听 3：音频配置到达】
+    _configSubscription = _networkService.audioConfigStream.listen((config) {
+      _audioService.updateConfig(
+        sampleRate: config.sampleRate,
+        channelCount: config.channels,
+      );
+    });
+
+    // 【监听 4：错误发生】
     // 错误文字存入 _errorMessage，界面会显示红色提示。
     _errorSubscription = _networkService.errorStream.listen((error) {
       _errorMessage = error;
@@ -210,6 +213,7 @@ class ConnectionProvider extends ChangeNotifier {
     // 先取消全部订阅（否则流继续回调 → 操作已销毁的对象崩溃）
     _statusSubscription?.cancel();
     _audioSubscription?.cancel();
+    _configSubscription?.cancel();
     _errorSubscription?.cancel();
     // 再释放文本控制器（它内部也持有监听资源）
     _serverAddressController.dispose();

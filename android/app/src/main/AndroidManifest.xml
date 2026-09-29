@@ -1,4 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 允许 app 访问网络（WebSocket 连接需要） -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:label="pc_speaker"
         android:name="${applicationName}"

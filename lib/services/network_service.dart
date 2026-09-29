@@ -25,14 +25,14 @@
 // StreamSubscription 等异步/流处理能力（不用 pub get，内置）
 import 'dart:async';
 
+// dart:convert：提供 jsonDecode，用于解析服务器发来的 JSON 配置头。
+// 服务器连接后会先发一条文本消息告知音频格式（采样率、声道数等），
+// 后续才是二进制音频数据。需要 JSON 解析器来提取这些配置信息。
+import 'dart:convert';
+
 // dart:typed_data：提供 Uint8List —— "无符号 8 位整型数组"，
 // 即原始字节数组。音频、图片等二进制数据在网络上传输就是这种格式。
 import 'dart:typed_data';
-
-// logger：第三方日志库（在 pubspec.yaml 中声明依赖后
-// `flutter pub get` 下载）。用来在控制台打印带颜色、格式化的调试信息，
-// 比裸 print() 更易读。
-import 'package:logger/logger.dart';
 
 // web_socket_channel：Dart 社区最常用的 WebSocket 库。
 // 相比 dart 内置的 WebSocket，它返回的是标准 Stream，
@@ -52,15 +52,33 @@ enum ConnectionStatus {
   error,        // 出错（连接失败或被中断）
 }
 
+/// 音频配置信息（服务器连接后发送的 JSON 头部解析结果）。
+///
+/// 服务器在发送音频数据之前，会先发一条 JSON 文本消息，
+/// 告知音频格式参数（采样率、声道数等）。本端必须据此配置播放器，
+/// 否则播放速度/音调会异常。
+///
+/// class 关键字：定义一个"数据类"，把相关的几个字段打包在一起。
+/// final 字段：创建后不可修改（不可变对象），线程安全，适合在流中传递。
+class AudioConfig {
+  final int sampleRate;   // 采样率（Hz），如 48000
+  final int channels;     // 声道数，如 2（立体声）
+  final String format;    // 编码格式，如 "pcm_s16le"（16 位有符号，小端序）
+
+  /// 构造函数：创建时必须提供这三个值。
+  /// required 关键字：命名参数必传，漏写编译器直接报错。
+  const AudioConfig({
+    required this.sampleRate,
+    required this.channels,
+    required this.format,
+  });
+}
+
 /// 网络服务 - 管理 WebSocket 连接
 ///
 /// 生命周期：随 App 启动创建（见 main.dart），全 App 单例共用，
 /// App 退出时调用 dispose() 释放。
 class NetworkService {
-  /// 日志器。PrettyPrinter 让输出带颜色、带分隔线、更易读；
-  /// methodCount: 0 表示打印日志时不附带调用栈方法名（输出更干净）。
-  final _logger = Logger(printer: PrettyPrinter(methodCount: 0));
-
   /// 当前的 WebSocket 通道。声明为可空（WebSocketChannel?）
   /// 因为"未连接时它不存在"。这是 Dart 的空安全机制：
   /// 类型带 ? 表示可以是 null，编译器强制你在使用前判空，
@@ -88,6 +106,7 @@ class NetworkService {
   final _connectionStatusController =
       StreamController<ConnectionStatus>.broadcast(); // 状态变化广播
   final _audioDataController = StreamController<Uint8List>.broadcast(); // 音频字节广播
+  final _audioConfigController = StreamController<AudioConfig>.broadcast(); // 音频配置广播
   final _errorController = StreamController<String>.broadcast(); // 错误消息广播
 
   // 内部维护的"当前状态"变量，带 _ 前缀表示私有（类外不可见）。
@@ -102,6 +121,10 @@ class NetworkService {
 
   /// 音频数据流：服务器推来的每一块音频字节都会从这里流出
   Stream<Uint8List> get audioDataStream => _audioDataController.stream;
+
+  /// 音频配置流：服务器连接后发送的 JSON 配置头解析结果从这里流出。
+  /// ConnectionProvider 订阅它，收到后调 AudioService.updateConfig() 同步配置。
+  Stream<AudioConfig> get audioConfigStream => _audioConfigController.stream;
 
   /// 错误信息流：发生错误时，人类可读的错误描述从这里流出
   Stream<String> get errorStream => _errorController.stream;
@@ -140,8 +163,6 @@ class NetworkService {
           ? serverAddress
           : 'ws://$serverAddress/ws/audio'; // $变量名 是字符串插值
 
-      _logger.i('正在连接到: $url'); // .i = info 级别日志
-
       // 【发起连接】
       // WebSocketChannel.connect 只是"开始拨号"，返回通道对象，
       // 此时连接未必已建立。Uri.parse 把字符串解析成标准的 URL 对象。
@@ -153,42 +174,44 @@ class NetworkService {
       // 没有这一句的话，"服务器没开机"这种错误会被延迟、难以捕获。
       await _channel!.ready; // ! 表示"我确认这里不为 null"
 
-      _logger.i('WebSocket 连接已建立');
       _updateStatus(ConnectionStatus.connected);
 
       // 【订阅通道数据流 —— 开始"收货"】
-      // channel.stream 是服务器推来的数据流。listen 挂了三个回调：
-      //   第 1 个参数 onData：每来一块数据调用一次
-      //   onError：通道出错时调用
-      //   onDone ：连接关闭（服务器下线/网络断开）时调用
       _subscription = _channel!.stream.listen(
         (data) {
-          // WebSocket 推来的二进制帧在不同平台可能是 Uint8List 或
-          // 普通 List<int>，两种都兼容处理，统一转成 Uint8List
-          // 再转发给音频流管道。is 关键字用于运行时类型检查。
-          if (data is Uint8List) {
+          if (data is String) {
+            // 【文本帧：JSON 音频配置】
+            try {
+              final json = jsonDecode(data);
+              if (json is Map && json['type'] == 'audio_config') {
+                final config = AudioConfig(
+                  sampleRate: json['sample_rate'] as int,
+                  channels: json['channels'] as int,
+                  format: json['format'] as String? ?? 'pcm_s16le',
+                );
+                _audioConfigController.add(config);
+              }
+            } catch (_) {
+              // JSON 解析失败，忽略无效数据
+            }
+          } else if (data is Uint8List) {
+            // 【二进制帧：音频 PCM 数据】
             _audioDataController.add(data);
           } else if (data is List<int>) {
             _audioDataController.add(Uint8List.fromList(data));
           }
-          // 注意：本层不认识"这是音频"，它只管转发字节 —— 分层职责
         },
         onError: (error) {
-          _logger.e('WebSocket 错误: $error'); // .e = error 级别
           _errorController.add('连接错误: $error');
           _updateStatus(ConnectionStatus.error);
         },
         onDone: () {
           // 对端关闭连接时触发（正常挥手或断网都会走到这里）
-          _logger.i('WebSocket 连接已关闭');
           _updateStatus(ConnectionStatus.disconnected);
         },
       );
     } catch (e) {
       // 兜底：地址格式错误、服务器不存在、超时、拒绝连接等
-      // 所有同步/异步异常都汇到这里，转成用户能看懂的错误状态，
-      // 而不是让 App 直接崩溃。
-      _logger.e('连接失败: $e');
       _errorController.add('连接失败: $e');
       _updateStatus(ConnectionStatus.error);
     }
@@ -213,7 +236,6 @@ class NetworkService {
 
     // 【第三步：广播"已断开"状态】界面据此恢复成"未连接"
     _updateStatus(ConnectionStatus.disconnected);
-    _logger.i('已断开连接');
   }
 
   /// 向服务器发送数据（预留功能：如音量控制指令、握手消息等）
@@ -242,9 +264,10 @@ class NetworkService {
   /// 流"这类外部资源 —— 必须手动关闭，否则泄漏。
   void dispose() {
     disconnect(); // 先断连接、取消订阅
-    // 再关闭三条流管道，关闭后不可再 add，订阅者收到"结束"事件
+    // 再关闭四条流管道，关闭后不可再 add，订阅者收到"结束"事件
     _connectionStatusController.close();
     _audioDataController.close();
+    _audioConfigController.close();
     _errorController.close();
   }
 }
