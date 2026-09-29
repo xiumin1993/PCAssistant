@@ -16,6 +16,7 @@
 //                     └─ Column（垂直排列一组组件：图标/文字/输入框/按钮）
 // ============================================================================
 
+import 'dart:io' show Platform; // Platform.isAndroid/isIOS —— 平台差异显隐用
 import 'dart:math' as math; // sin —— 脉冲红点的呼吸透明度用
 
 import 'package:flutter/material.dart';   // UI 组件库
@@ -190,33 +191,46 @@ class HomeScreen extends StatelessWidget {
                   // 点一下把地址填成 127.0.0.1:8080（手机本机回环）。
                   // 前提：USB 线插好 + 电脑执行过 adb reverse（详见 README）。
                   // 走 USB 不占 WiFi、延迟更稳，是对实时性要求高时的首选。
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      OutlinedButton.icon(
-                        onPressed:
-                            provider.isConnected ? null : provider.fillUsbAddress,
-                        icon: const Icon(Icons.usb, size: 18),
-                        label: const Text('USB 有线直连'),
-                      ),
-                      const SizedBox(width: 12),
-                      OutlinedButton.icon(
-                        onPressed: provider.isConnected
-                            ? null
-                            : () {
-                                // 回到 WiFi 模式：清空地址，让用户填电脑局域网 IP
-                                provider.serverAddressController.clear();
-                              },
-                        icon: const Icon(Icons.wifi, size: 18),
-                        label: const Text('清空重填(WiFi)'),
-                      ),
-                    ],
-                  ),
-                  const Text(
-                    'USB 需先在电脑执行: adb reverse tcp:8080 tcp:8080',
-                    style: TextStyle(fontSize: 11, color: Colors.black45),
-                    textAlign: TextAlign.center,
-                  ),
+                  // if (条件) ...[元素列表] 是 Dart 的"条件展开"写法：
+                  // 条件成立才把这组 Widget 塞进 children，相当简洁。
+                  // USB 隧道依赖 Android 的 adb reverse，iPhone 没有对应机制
+                  // （iOS 的 USB 转发要在电脑端做 usbmuxd，不在当前范围），
+                  // 所以 iOS 上隐藏按钮、只给一行提示。
+                  if (Platform.isAndroid) ...[
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: provider.isConnected
+                              ? null
+                              : provider.fillUsbAddress,
+                          icon: const Icon(Icons.usb, size: 18),
+                          label: const Text('USB 有线直连'),
+                        ),
+                        const SizedBox(width: 12),
+                        OutlinedButton.icon(
+                          onPressed: provider.isConnected
+                              ? null
+                              : () {
+                                  // 回到 WiFi 模式：清空地址，让用户填电脑局域网 IP
+                                  provider.serverAddressController.clear();
+                                },
+                          icon: const Icon(Icons.wifi, size: 18),
+                          label: const Text('清空重填(WiFi)'),
+                        ),
+                      ],
+                    ),
+                    const Text(
+                      'USB 需先在电脑执行: adb reverse tcp:8080 tcp:8080',
+                      style: TextStyle(fontSize: 11, color: Colors.black45),
+                      textAlign: TextAlign.center,
+                    ),
+                  ] else
+                    const Text(
+                      'iPhone 请使用 WiFi 连接：填电脑的局域网 IP',
+                      style: TextStyle(fontSize: 11, color: Colors.black45),
+                      textAlign: TextAlign.center,
+                    ),
                   const SizedBox(height: 24),
 
                   // ==========================================================

@@ -110,11 +110,17 @@ class AudioService {
   /// 首页的返回键会调用它——而不是让系统直接"退出应用"杀掉进程，
   /// 这样 WebSocket 连接、麦克风/摄像头守护都保持在后台工作。
   /// 真正的实现在原生层 MainActivity.kt 的 "goHome" 分支。
+  ///
+  /// iOS 行为说明（v3.5 交叉适配审计）：苹果系统【不存在】"应用把自己
+  /// 送回桌面"的 API（防止 App 伪装系统行为），所以 AppDelegate.swift
+  /// 里 goHome 有意回复 notImplemented → 这里静默捕获，表现为"返回键
+  /// 无动作"。iPhone 用户请用上滑手势回桌面——配合 Info.plist 里的
+  /// UIBackgroundModes=audio，麦克风与连接照样在后台活着。
   Future<void> goHome() async {
     try {
       await _channel.invokeMethod('goHome');
     } catch (_) {
-      // 万一原生层没响应（比如热重载后通道未就绪），
+      // 万一原生层没响应（比如热重载后通道未就绪、或 iOS 的 notImplemented），
       // 静默失败即可——用户再按一次返回键就好
     }
   }

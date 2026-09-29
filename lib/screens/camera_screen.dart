@@ -16,6 +16,7 @@
 // 颜色和硬件状态严格一致，是"硬件即开即见"的隐私承诺。
 // ============================================================================
 
+import 'dart:io' show Platform; // Platform.isIOS —— iOS 特有限制的提示显隐
 import 'dart:typed_data'; // Uint8List：预览 JPEG 字节的类型
 
 import 'package:flutter/material.dart';
@@ -319,6 +320,26 @@ class CameraScreen extends StatelessWidget {
                           height: 1.6,
                         ),
                   ),
+
+                  // iOS 平台差异提示（安卓不显示这块）。
+                  // 原因：苹果系统硬性规定，App 退到后台或锁屏后
+                  // 【不允许继续采集相机】（麦克风可以，相机不行）。
+                  // 所以 iPhone 上"守护/后台待命"对摄像头无效，必须亮屏
+                  // 停在本页 —— 与其让用户以为守护失灵，不如明说。
+                  if (Platform.isIOS)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Text(
+                        'iPhone 注意：受 iOS 系统限制，摄像头必须在\n'
+                        '本页面亮屏待命才能推流（退后台/锁屏会断），\n'
+                        '麦克风与喇叭不受此限制',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context).colorScheme.error,
+                              height: 1.6,
+                            ),
+                      ),
+                    ),
                 ],
               ),
             ),
