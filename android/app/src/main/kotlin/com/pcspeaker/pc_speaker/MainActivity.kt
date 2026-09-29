@@ -329,6 +329,22 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
 
+                // v3.4.2：首页按返回键不再"退出应用"，而是回到手机桌面，
+                // App 退到后台继续活着（守护前台服务保活，连接/推流不中断）。
+                // 原理：发一个"桌面"Intent（ACTION_MAIN + CATEGORY_HOME），
+                // 相当于用户按了手机的 Home 键——我们的 Activity 只是被
+                // 盖到后面，并没有 finish()，进程和 WebSocket 都不受影响。
+                "goHome" -> {
+                    val home = Intent(Intent.ACTION_MAIN).apply {
+                        addCategory(Intent.CATEGORY_HOME)
+                        // 从非 Activity 上下文/频道回调里启动 Activity，
+                        // 必须加 NEW_TASK 标记，否则系统会抛异常
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(home)
+                    result.success(true)
+                }
+
                 else -> result.notImplemented()
             }
         }

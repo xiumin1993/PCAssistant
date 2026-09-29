@@ -106,6 +106,19 @@ class AudioService {
   /// 设置音量（预留功能）
   Future<void> setVolume(double volume) async {}
 
+  /// v3.4.2：回到手机桌面（等价于按了 Home 键），App 退后台继续运行。
+  /// 首页的返回键会调用它——而不是让系统直接"退出应用"杀掉进程，
+  /// 这样 WebSocket 连接、麦克风/摄像头守护都保持在后台工作。
+  /// 真正的实现在原生层 MainActivity.kt 的 "goHome" 分支。
+  Future<void> goHome() async {
+    try {
+      await _channel.invokeMethod('goHome');
+    } catch (_) {
+      // 万一原生层没响应（比如热重载后通道未就绪），
+      // 静默失败即可——用户再按一次返回键就好
+    }
+  }
+
   bool get isPlaying => _isPlaying;
 
   /// 释放全部资源（App 退出时由 main.dart 触发）

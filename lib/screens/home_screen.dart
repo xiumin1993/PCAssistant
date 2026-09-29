@@ -36,6 +36,10 @@ import 'mic_screen.dart';
 // 导入摄像头页面（v3.4 入口）
 import 'camera_screen.dart';
 
+// 导入音频服务：v3.4.2 起首页返回键调用它的 goHome()，
+// 让 App"回到桌面后台运行"而不是直接退出。
+import '../services/audio_service.dart';
+
 /// 首页。
 /// 用 StatelessWidget 就够：所有会变的都住在 Provider 里，
 /// 本 Widget 只负责"根据 Provider 当前状态生成界面"。
@@ -44,9 +48,23 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Scaffold：页面"脚手架"，提供 Material 页面的标准结构——
-    // 顶部栏(appBar)、主体(body)、底部栏、浮动按钮等插槽。
-    return Scaffold(
+    // PopScope（v3.4.2）：拦截 Android 系统返回键。
+    // canPop: false 表示"别按默认方式退出页面"——首页是路由栈最底层，
+    // 默认行为就是直接杀掉整个 App。我们在 onPopInvokedWithResult 里
+    // 改成调原生 goHome()：相当于帮你按了一下手机的 Home 键，
+    // App 退到桌面后台继续运行（守护前台服务保活，连接不断、推流不停）。
+    // 子页面（麦克风/摄像头页）的返回键不受影响，仍是正常的"返回首页"。
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) {
+          // didPop=false 说明系统真的没退出，这里接管按键
+          context.read<AudioService>().goHome();
+        }
+      },
+      // Scaffold：页面"脚手架"，提供 Material 页面的标准结构——
+      // 顶部栏(appBar)、主体(body)、底部栏、浮动按钮等插槽。
+      child: Scaffold(
       // ---------------- 顶部标题栏 ----------------
       appBar: AppBar(
         title: const Text('PC Speaker'), // App 名称
@@ -579,6 +597,8 @@ class HomeScreen extends StatelessWidget {
             ),
           );
         },
+      ),
+      // child: 的 Scaffold 在这里收尾，外面再闭合 PopScope
       ),
     );
   }
