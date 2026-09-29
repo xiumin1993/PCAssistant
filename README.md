@@ -59,6 +59,8 @@ flutter run --release                   # 需要已配置签名
 > 原生层全部在 `ios/Runner/AppDelegate.swift`（无第三方 Swift 包），通道契约与 Android 完全一致，Dart 层零改动。
 > **iOS 系统限制**：相机不允许后台采集——App 退后台/息屏时摄像头流暂停（回前台自动恢复）；麦克风+播放靠 `UIBackgroundModes=audio` 可持续后台工作。
 
+> **iPhone + Windows 电脑端（推荐的跨平台组合）**：电脑端服务器**零改动**直接复用，三大功能全通。差异仅两点：① USB 有线模式不可用（`adb reverse` 是安卓专属），请走 WiFi；② 相机须停留在取景页亮屏使用。首页返回键在 iPhone 上无动作属正常（苹果禁止 App 自行回桌面，用系统上滑手势即可，麦克风后台不受影响）。
+
 ## 3. 使用流程
 
 1. 电脑运行 AudioServer（默认监听 8080）；
