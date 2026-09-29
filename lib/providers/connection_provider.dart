@@ -153,6 +153,21 @@ class ConnectionProvider extends ChangeNotifier {
   String? get errorMessage => _errorMessage;
   TextEditingController get serverAddressController => _serverAddressController;
 
+  /// v3.4.4：USB 有线直连 —— 一键把地址填成本机回环 127.0.0.1:8080。
+  ///
+  /// 原理：手机用 USB 线插到电脑上后，在电脑执行一条命令
+  ///   adb reverse tcp:8080 tcp:8080
+  /// 它把"手机自己的 8080 端口"通过 USB 线镜像回"电脑的 8080 端口"。
+  /// 于是手机连 127.0.0.1:8080 就等于连上了电脑上的 AudioServer，
+  /// 完全不走 WiFi —— 延迟更低、不受无线网络波动影响，适合对
+  /// 实时性要求最苛刻的场景。
+  /// （对比 adb forward：forward 是"电脑连手机的端口"，方向相反，别搞混）
+  void fillUsbAddress() {
+    _serverAddressController.text = '127.0.0.1:8080';
+    _serverAddress = '127.0.0.1:8080';
+    notifyListeners();
+  }
+
   /// 当前状态对应的"副标题文案"。
   ///
   /// switch 穷举：Dart 要求对枚举的 switch 必须覆盖所有值，

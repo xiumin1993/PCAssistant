@@ -182,6 +182,41 @@ class HomeScreen extends StatelessWidget {
                       enabled: !provider.isConnected,
                     ),
                   ),
+                  const SizedBox(height: 12),
+
+                  // ==========================================================
+                  // ③.5 USB 有线直连快捷键（v3.4.4）
+                  // ==========================================================
+                  // 点一下把地址填成 127.0.0.1:8080（手机本机回环）。
+                  // 前提：USB 线插好 + 电脑执行过 adb reverse（详见 README）。
+                  // 走 USB 不占 WiFi、延迟更稳，是对实时性要求高时的首选。
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed:
+                            provider.isConnected ? null : provider.fillUsbAddress,
+                        icon: const Icon(Icons.usb, size: 18),
+                        label: const Text('USB 有线直连'),
+                      ),
+                      const SizedBox(width: 12),
+                      OutlinedButton.icon(
+                        onPressed: provider.isConnected
+                            ? null
+                            : () {
+                                // 回到 WiFi 模式：清空地址，让用户填电脑局域网 IP
+                                provider.serverAddressController.clear();
+                              },
+                        icon: const Icon(Icons.wifi, size: 18),
+                        label: const Text('清空重填(WiFi)'),
+                      ),
+                    ],
+                  ),
+                  const Text(
+                    'USB 需先在电脑执行: adb reverse tcp:8080 tcp:8080',
+                    style: TextStyle(fontSize: 11, color: Colors.black45),
+                    textAlign: TextAlign.center,
+                  ),
                   const SizedBox(height: 24),
 
                   // ==========================================================
