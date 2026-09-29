@@ -1,6 +1,22 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- 允许 app 访问网络（WebSocket 连接需要） -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- v3：手机当 PC 麦克风 —— 录音权限（运行时弹窗申请） -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- 音频焦点/路由协调（VOICE_COMMUNICATION 回声消除链路需要） -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- 声明需要麦克风硬件，上架商店时用于设备过滤 -->
+    <uses-feature android:name="android.hardware.microphone" android:required="true" />
+    <!-- v3.1：麦克风守护前台服务（连上电脑后常驻通知保活，息屏不被杀） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- v3.4：手机当 PC 摄像头 —— 相机权限（运行时弹窗申请） -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Android 14 起：相机类前台服务需要单独声明权限 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <!-- 声明需要相机硬件，上架商店时用于设备过滤 -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <application
         android:label="pc_speaker"
         android:name="${applicationName}"
@@ -27,6 +43,22 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- v3.1：麦克风守护前台服务（specialUse：保持 WebSocket 待命，
+             等 PC 端 mic_state 指令唤醒录音，非持续占用麦克风） -->
+        <service
+            android:name=".MicForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keep WebSocket standby alive so the PC can wake the phone mic on demand" />
+        </service>
+        <!-- v3.4：摄像头守护前台服务（foregroundServiceType=camera：
+             相机只在 PC 应用真正观看时才打开，用完即关，通知栏全程可见） -->
+        <service
+            android:name=".CamForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="camera" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

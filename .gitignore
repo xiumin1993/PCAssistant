@@ -58,6 +58,7 @@ app.*.map.json
 # Android 构建产物
 # --------------------------------
 android/.gradle/
+android/**/build/
 android/captures/
 android/gradlew
 android/gradlew.bat

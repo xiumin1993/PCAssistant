@@ -16,15 +16,8 @@ dependencies:
   # 网络通信 - WebSocket 用于实时音频流传输
   web_socket_channel: ^3.0.1
 
-  # 音频播放 - 实时 PCM 流式播放（低延迟，直接喂原始字节到扬声器）
-  # 注意：^2.1.0 在镜像源上无可用版本，latest 为 3.3.3
-  flutter_pcm_sound: ^3.3.3
-
   # 本地存储 - 保存连接配置
   shared_preferences: ^2.3.3
-
-  # 日志
-  logger: ^2.4.0
 
 dev_dependencies:
   flutter_test:

@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>手机当电脑摄像头 · 设计稿 v1</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; background: #eef1f6; color: #1f2937; padding: 32px; }
+  h1 { font-size: 22px; margin-bottom: 6px; }
+  .sub { color: #6b7280; font-size: 13px; margin-bottom: 24px; }
+  .section-title { font-size: 15px; font-weight: 700; margin: 28px 0 12px; color: #374151; }
+  .row { display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start; }
+
+  /* ── 手机外壳 ── */
+  .phone { width: 300px; background: #fff; border-radius: 26px; border: 1px solid #d7dce4; box-shadow: 0 8px 24px rgba(31,41,55,.08); overflow: hidden; }
+  .phone .bar { background: #f7f8fb; padding: 8px 16px; font-size: 11px; color: #6b7280; display: flex; justify-content: space-between; }
+  .phone .title { text-align: center; font-weight: 700; padding: 14px 0 8px; font-size: 16px; }
+  .phone .body { padding: 12px 16px 20px; }
+  .banner { border-radius: 12px; padding: 10px 12px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .banner .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .banner.standby { background: #eef2f7; border: 1px solid #cbd5e1; color: #475569; }
+  .banner.standby .dot { background: #64748b; }
+  .banner.live { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; }
+  .banner.live .dot { background: #dc2626; animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .25; } }
+  .preview { width: 100%; aspect-ratio: 4/3; background: #111827; border-radius: 12px; position: relative; overflow: hidden; margin-bottom: 12px; }
+  .preview .grid { position: absolute; inset: 0; background:
+      linear-gradient(rgba(255,255,255,.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.06) 1px, transparent 1px);
+      background-size: 24px 24px; }
+  .preview .hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #9ca3af; font-size: 12px; }
+  .preview .rec { position: absolute; top: 8px; left: 8px; background: rgba(220,38,38,.9); color: #fff; font-size: 10px; padding: 2px 8px; border-radius: 8px; display: flex; align-items: center; gap: 4px; }
+  .preview .rec::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #fff; animation: blink 1s infinite; }
+  .btn { width: 100%; border-radius: 12px; padding: 12px; font-size: 14px; font-weight: 600; text-align: center; margin-bottom: 10px; }
+  .btn.blue { background: #2563eb; color: #fff; }
+  .btn.red { background: #dc2626; color: #fff; }
+  .btn.ghost { background: #fff; color: #374151; border: 1px solid #d1d5db; }
+  .opt { display: flex; gap: 8px; margin-bottom: 12px; }
+  .chip { flex: 1; text-align: center; font-size: 12px; padding: 8px 4px; border-radius: 10px; border: 1px solid #d1d5db; color: #6b7280; background: #fff; }
+  .chip.on { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; font-weight: 700; }
+  .kv { font-size: 12px; color: #4b5563; display: flex; justify-content: space-between; padding: 7px 2px; border-bottom: 1px dashed #e5e7eb; }
+  .kv b { color: #111827; }
+  .kv .warn { color: #b91c1c; font-weight: 700; }
+  .kv .ok { color: #15803d; font-weight: 700; }
+  .switch { width: 38px; height: 22px; border-radius: 11px; background: #2563eb; position: relative; flex: none; }
+  .switch::after { content: ""; position: absolute; width: 18px; height: 18px; border-radius: 50%; background: #fff; top: 2px; right: 2px; }
+  .switch.off { background: #cbd5e1; }
+  .switch.off::after { left: 2px; right: auto; }
+  .card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 10px 12px; font-size: 13px; display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .card .t { font-weight: 700; }
+  .card .s { font-size: 11px; color: #6b7280; margin-top: 2px; }
+
+  /* ── 服务器窗口 ── */
+  .win { width: 640px; background: #fff; border: 1px solid #cfd6df; border-radius: 8px; box-shadow: 0 10px 30px rgba(31,41,55,.12); overflow: hidden; }
+  .win .cap { background: #f3f5f9; padding: 8px 14px; font-size: 12px; color: #475569; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; }
+  .tabs { display: flex; gap: 4px; padding: 10px 14px 0; border-bottom: 1px solid #e5e7eb; }
+  .tab { font-size: 13px; padding: 8px 18px; border-radius: 8px 8px 0 0; color: #6b7280; }
+  .tab.on { background: #fff; border: 1px solid #e5e7eb; border-bottom: 2px solid #fff; color: #1d4ed8; font-weight: 700; }
+  .win .body { padding: 16px; display: flex; gap: 16px; }
+  .camview { width: 300px; aspect-ratio: 4/3; background: #111827; border-radius: 10px; position: relative; overflow: hidden; flex: none; }
+  .camview .grid { position: absolute; inset: 0; background:
+      linear-gradient(rgba(255,255,255,.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.06) 1px, transparent 1px);
+      background-size: 24px 24px; }
+  .camview .hint { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 6px; align-items: center; justify-content: center; color: #9ca3af; font-size: 12px; }
+  .side { flex: 1; font-size: 13px; }
+  .pill { display: inline-block; font-size: 11px; padding: 2px 10px; border-radius: 10px; }
+  .pill.live { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; font-weight: 700; }
+  .pill.idle { background: #f1f5f9; color: #64748b; border: 1px solid #cbd5e1; }
+  .note { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 12px 14px; font-size: 12.5px; color: #92400e; margin-top: 20px; line-height: 1.8; }
+  .flow { background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px 18px; font-size:13px; line-height:2.1; color:#374151; margin-top:12px;}
+  .flow code { background:#f1f5f9; padding:1px 6px; border-radius:6px; font-size:12px; color:#0f172a;}
+</style>
+</head>
+<body>
+  <h1>📷 手机当电脑摄像头 —— 设计稿 v1（待确认）</h1>
+  <div class="sub">与麦克风模式同一套哲学：虚拟设备（Unity Capture）+ 手机自动配合 + 隐私可见性。以下界面均为浅色风格，红色 = 硬件真的开着。</div>
+
+  <div class="section-title">① 手机端 · 摄像头模式页（两个状态）</div>
+  <div class="row">
+    <!-- 待机 -->
+    <div class="phone">
+      <div class="bar"><span>21:52</span><span>0.6K/s ▂▄▆</span></div>
+      <div class="title">摄像头模式</div>
+      <div class="body">
+        <div class="banner standby"><span class="dot"></span>待命中 · 摄像头已关闭，点按钮或电脑请求时自动开启</div>
+        <div class="preview"><div class="grid"></div><div class="hint">（摄像头关闭，无预览）</div></div>
+        <div class="opt">
+          <div class="chip">前置</div><div class="chip on">后置</div>
+          <div class="chip on">流畅 640p·20帧</div><div class="chip">高清 720p·15帧</div>
+        </div>
+        <div class="btn blue">开启摄像头</div>
+        <div class="kv"><span>上行状态</span><b>待命 · 摄像头硬件已关闭</b></div>
+        <div class="kv"><span>电脑使用</span><b>空闲</b></div>
+        <div class="kv"><span>画面方向</span><b>自动（EXIF 转正）</b></div>
+      </div>
+    </div>
+    <!-- 工作中 -->
+    <div class="phone">
+      <div class="bar"><span>21:53</span><span>5.8M/s ▂▄▆</span></div>
+      <div class="title">摄像头模式</div>
+      <div class="body">
+        <div class="banner live"><span class="dot"></span>电脑正在使用你的摄像头！</div>
+        <div class="preview"><div class="grid"></div><div class="rec">REC · 20fps</div><div class="hint" style="color:#4b5563">实时取景预览</div></div>
+        <div class="opt">
+          <div class="chip on">前置</div><div class="chip">后置</div>
+          <div class="chip on">流畅 640p·20帧</div><div class="chip">高清 720p·15帧</div>
+        </div>
+        <div class="btn red">停止摄像头</div>
+        <div class="kv"><span>上行状态</span><b class="warn">画面上行中</b></div>
+        <div class="kv"><span>电脑使用</span><b class="warn">正在使用</b></div>
+        <div class="kv"><span>帧率 / 丢帧</span><b>20.1 fps / 0.3%</b></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title">② 手机端 · 首页新增卡片（与"麦克风守护"并列）</div>
+  <div class="row" style="max-width:340px">
+    <div class="phone">
+      <div class="bar"><span>21:52</span><span>0.6K/s ▂▄</span></div>
+      <div class="title">PC Speaker</div>
+      <div class="body">
+        <div class="banner standby"><span class="dot"></span>已连接 · 麦克风待命中</div>
+        <div class="card"><span>🎤</span><div style="flex:1"><div class="t">麦克风守护</div><div class="s">待命中 · 麦克风硬件已关闭</div></div><div class="switch"></div></div>
+        <div class="card"><span>📷</span><div style="flex:1"><div class="t">摄像头守护</div><div class="s">待命中 · 摄像头硬件已关闭</div></div><div class="switch"></div></div>
+        <div class="btn ghost">摄像头详情 / 取景</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title">③ 电脑端 · AudioServer 窗口新增"摄像头"页签</div>
+  <div class="win">
+    <div class="cap"><span>Audio Server — PC Assistant</span><span>— □ ×</span></div>
+    <div class="tabs"><div class="tab">扬声器</div><div class="tab">麦克风</div><div class="tab on">摄像头</div></div>
+    <div class="body">
+      <div class="camview"><div class="grid"></div><div class="hint"><span>虚拟摄像头输出预览</span><span style="font-size:11px">（Unity Capture 实际收到的画面）</span></div></div>
+      <div class="side">
+        <p style="margin-bottom:10px">状态：<span class="pill live">● 接收中 20.1 fps · 640×480</span></p>
+        <div class="kv"><span>来源</span><b>红米 4X（192.168.0.107）</b></div>
+        <div class="kv"><span>虚拟设备</span><b>Unity Capture Camera</b></div>
+        <div class="kv"><span>解码</span><b>JPEG → BGRA32 · 共享内存</b></div>
+        <div class="kv"><span>带宽</span><b>5.8 Mbps · 丢帧 0.3%</b></div>
+        <div class="btn blue" style="margin-top:14px">请求手机开启摄像头</div>
+        <div class="btn ghost">强制手机关闭</div>
+        <p style="font-size:11.5px;color:#6b7280;margin-top:10px;line-height:1.7">会议 / 相机软件里选摄像头为<br><b>"Unity Capture Camera"</b> 即可看到手机画面</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title">④ 技术方案（与麦克风模式同构）</div>
+  <div class="flow">
+    <b>数据链路：</b>手机 CameraX 取帧 → JPEG 编码（硬件加速）→ WebSocket 二进制帧 → 电脑 AudioServer 解码（zune-jpeg）→ BGRA32 写入共享内存 → Unity Capture 虚拟摄像头驱动 → 任意应用可见<br>
+    <b>协议：</b>复用现有 8080 端口。新增 <code>cam_start</code> / <code>cam_stop</code> / <code>cam_request</code>（电脑→手机）文本指令；二进制帧加 <code>0x03</code> 通道头区分麦克风 PCM 与摄像头 JPEG<br>
+    <b>隐私设计：</b>摄像头<b>不</b>做"自动唤醒"（电脑应用打开摄像头时 Windows 没有可靠的被动感知手段）→ 开启只有两个入口：手机点"开启摄像头"，或电脑点"请求手机开启摄像头"（手机弹红色横幅确认后才会开硬件）。关闭 = 手机随时点红色按钮，或电脑"强制关闭"。守护开关可整体注销<br>
+    <b>息屏：</b>沿用前台服务；摄像头模式息屏后继续推流（可选"息屏自动停止"省电选项）<br>
+    <b>需要安装：</b>免费的 <code>Unity Capture</code> 虚拟摄像头驱动（约 2MB，装一次即可，与 VB-CABLE 同类）
+  </div>
+
+  <div class="note">
+    ⚠️ 待你确认的三件事：<br>
+    1. 同意安装 <b>Unity Capture</b> 驱动（免费开源，BANDAI NAMCO Studios 出品，会议软件可识别为标准摄像头）；<br>
+    2. 默认画质 <b>640×480 · 20fps</b>（老机型 Wi-Fi 下最稳），可切 720p·15fps —— 还是想要 1080p？带宽会到 ~15Mbps；<br>
+    3. 摄像头开启必须<b>手动/电脑请求</b>（不做全自动），因为 Windows 无法像麦克风那样可靠地"被动感知"哪个应用在占摄像头 —— 这是隐私上最稳妥的形态。
+  </div>
+</body>
+</html>

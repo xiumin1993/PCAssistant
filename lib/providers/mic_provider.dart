@@ -1,0 +1,379 @@
+// ============================================================================
+// mic_provider.dart —— 手机麦克风状态管理器（v3.3 按需录音版）
+// ----------------------------------------------------------------------------
+// 它把三样东西粘在一起：
+//
+//   MicService（原生采集） <--->  MicProvider（调度+状态） <--->  界面
+//                                      │
+//                                      └-----> NetworkService（把 PCM 发给 PC）
+//
+// v3.3 核心行为（用户明确要求："电脑开始用我才录，电脑停我立马停"）：
+//
+//   连接成功 → 进入【待命 standby】：只挂前台服务 + 向服务器登记会话，
+//              麦克风硬件是【关】的 —— 不录音、不耗电、无录音小绿点。
+//   PC 应用打开麦克风（录 CABLE Output）→ 服务器 250ms 内检测到，
+//              推 mic_state{active:true} → 手机【此刻才】打开 AudioRecord 上行。
+//   PC 应用关闭麦克风 → 服务器推 mic_state{active:false} → 手机【立刻】停采集，
+//              回到待命。
+//
+//   全程零点击。为什么现在敢用"唤醒"方案：早期 PKEY 占用检测在虚拟声卡上
+//   永远不触发才被迫改成常开；现在服务器改用 WASAPI 音频会话枚举，已实测
+//   可靠（开/关都能在 0.5 秒内感知），所以恢复"用时才开"的合理设计。
+//
+//   保留的人工控制：
+//     · 静音键 —— 真关硬件（比"闭嘴"更彻底的隐私承诺）；解除静音时若
+//       电脑正在用则自动恢复采集；
+//     · 守护开关（首页）—— 彻底注销会话，连待命都不留。
+//
+//   状态机：
+//     idle ──连接──> standby ──mic_state true──> live
+//     live ──mic_state false──> standby ──断开/关守护──> idle
+// ============================================================================
+
+import 'dart:async';
+import 'dart:convert'; // jsonEncode：把 Map 转成 JSON 字符串
+
+import 'package:flutter/material.dart'; // ChangeNotifier 所在
+
+import '../services/mic_service.dart';
+import '../services/network_service.dart';
+
+/// 麦克风会话状态枚举（界面按它显示不同文字/按钮颜色）
+enum MicState {
+  idle,     // 未启用（未连接，或用户手动关闭守护）
+  standby,  // 待命：会话已登记、前台服务在跑，但麦克风硬件【关闭】
+  starting, // 正在打开麦克风（瞬时状态，通常 <0.3 秒）
+  live,     // 录音上行中：电脑此刻正在使用麦克风，手机硬件已打开
+}
+
+/// 手机麦克风状态管理
+class MicProvider extends ChangeNotifier {
+  final NetworkService _networkService; // WebSocket 出口
+  final MicService _micService = MicService(); // 原生采集
+
+  StreamSubscription? _statusSubscription; // 连接状态订阅（自动待命的触发器）
+  StreamSubscription? _ackSubscription;    // mic_ack 回执订阅
+
+  MicState _state = MicState.idle;
+  bool _sessionEstablished = false; // 服务器已确认登记（收到 mic_ack）
+  bool _serverLive = false; // PC 是否有应用正在录 CABLE Output（服务器的权威判断）
+  bool _muted = false;      // 手动静音键：按下后即使电脑在用也不开麦
+  bool _needsPermission = false; // 连接了但缺录音权限 → 首页显示"启用"按钮
+  String? _errorMessage;    // 可空：null = 当前无错误
+
+  double _level = 0; // 最新一帧响度（0.0~1.0）
+  final List<double> _bars = []; // 电平滚动历史（界面画条形图用）
+  int _lastNotifyMs = 0;  // 上次 notifyListeners 的时间戳（节流用）
+
+  /// 构造函数：注入网络服务（和 ConnectionProvider 同款依赖注入套路）
+  MicProvider({required NetworkService networkService})
+      : _networkService = networkService {
+    // 【接线 1：PCM 数据 → WebSocket】
+    // 原生每采到一块就回调这里，直接塞进已连接的通道发给 PC。
+    // 只有 live（电脑正在用、硬件已开）且没按静音才放行。
+    _micService.onData = (bytes) {
+      if (_state == MicState.live && !_muted) {
+        _networkService.send(bytes); // send 内部有连接才发的保护
+      }
+    };
+
+    // 【接线 2：响度 → 电平条数据】
+    _micService.onLevel = (lv) {
+      _level = _muted ? 0 : lv; // 静音时电平条也归零，视觉一致
+      _bars.add(_level);
+      if (_bars.length > 28) _bars.removeAt(0); // 只留最近 28 帧
+      // 节流：音频帧每秒约 100 个，界面 100ms 刷一次（10fps）足够流畅
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (now - _lastNotifyMs >= 100) {
+        _lastNotifyMs = now;
+        notifyListeners();
+      }
+    };
+
+    // 【接线 3：WebSocket 连上 → 自动进入待命（零操作的核心）】
+    _statusSubscription = _networkService.connectionStatusStream.listen((s) {
+      if (s == ConnectionStatus.connected) {
+        _autoStandby();
+      } else if (s == ConnectionStatus.disconnected) {
+        // 断线：清掉一切（PC 端会话也随之消失）
+        _sessionEstablished = false;
+        _serverLive = false;
+        _muted = false;
+        if (_state != MicState.idle) {
+          _micService.stop();          // 硬件若开着，关掉
+          _micService.stopStandbyService();
+          _state = MicState.idle;
+          _bars.clear();
+          notifyListeners();
+        }
+      }
+    });
+
+    // 【接线 4：PC 回执 → 确认会话登记完成】
+    // mic_ack 若带 active=true（连上时电脑已经在用麦克风），
+    // network_service 会把它当作一条 mic_state 推给接线 5，这里只管记账。
+    _ackSubscription = _networkService.micAckStream.listen((_) {
+      _sessionEstablished = true;
+      notifyListeners();
+    });
+
+    // 【接线 5：PC 占用状态 → 驱动麦克风硬件开/关（v3.3 的核心开关）】
+    _micStateListener();
+  }
+
+  /// 监听服务器推来的 mic_state：这是"电脑用/停"的权威信号，
+  /// 直接决定手机麦克风硬件开还是关。
+  void _micStateListener() {
+    _networkService.micStateStream.listen((active) {
+      if (_serverLive == active) return; // 状态没变，什么都不做
+      _serverLive = active;
+
+      if (active) {
+        // 电脑开始用麦克风 → 若我在待命且没按静音，立刻开麦
+        if (_state == MicState.standby && !_muted) {
+          _openMic();
+        } else {
+          notifyListeners(); // 静音中/启动中：只刷新文案
+        }
+      } else {
+        // 电脑停止使用 → 若硬件开着，立刻关闭回待命
+        if (_state == MicState.live) {
+          _closeMic();
+        } else {
+          notifyListeners();
+        }
+      }
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // Getters（界面只读出口）
+  // --------------------------------------------------------------------------
+  MicState get state => _state;
+  bool get isLive => _state == MicState.live;
+  bool get isStandby => _state == MicState.standby;
+  bool get isBusy => _state == MicState.starting;
+  bool get isMuted => _muted;           // 静音键是否按下
+  bool get serverLive => _serverLive;   // 电脑是否有应用正在录 CABLE Output
+  bool get needsPermission => _needsPermission; // 首页据此显示"启用麦克风"
+  bool get hasSession => _sessionEstablished;
+  String? get errorMessage => _errorMessage;
+  double get level => _level;
+  List<double> get bars => List.unmodifiable(_bars); // 只读快照，防界面乱改
+
+  /// 状态对应的中文文案（详情页大字）
+  String get statusText {
+    switch (_state) {
+      case MicState.idle:
+        return _needsPermission
+            ? '已连接电脑，点下方按钮授权录音后即可直接使用'
+            : '连接电脑后自动进入待命，无需任何操作';
+      case MicState.standby:
+        return _muted
+            ? '已静音 —— 电脑用麦克风时也不会录音'
+            : '待命中 —— 麦克风已关闭，电脑用到时自动开启';
+      case MicState.starting:
+        return '电脑正在使用，正在开启麦克风...';
+      case MicState.live:
+        return '录音中 —— 电脑此刻正在使用你的麦克风';
+    }
+  }
+
+  /// 首页守护开关的副标题（一眼知道手机在干嘛）
+  String get guardianSubtitle {
+    switch (_state) {
+      case MicState.idle:
+        return _needsPermission ? '等待授权录音' : '未启用';
+      case MicState.standby:
+        return _muted ? '已静音 · 等待解除' : '待命中 · 麦克风硬件已关闭';
+      case MicState.starting:
+        return '正在开启…';
+      case MicState.live:
+        return '录音中 · 电脑此刻正在使用';
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // 自动待命：连接成功即触发，全程零点击
+  // --------------------------------------------------------------------------
+
+  /// 连接成功后的自动进入待命。
+  /// 静默检查权限：没有权限不弹扰窗，只置 needsPermission，
+  /// 由首页"启用麦克风"按钮让用户主动点一次（符合 Android 权限规范）。
+  Future<void> _autoStandby() async {
+    if (_state != MicState.idle) return; // 已在待命/工作中，幂等
+    if (!_networkService.isConnected) return;
+
+    if (!await _micService.hasPermission()) {
+      _needsPermission = true;
+      notifyListeners();
+      return;
+    }
+    _needsPermission = false;
+    await enterStandby();
+  }
+
+  /// 进入待命：挂前台守护服务 + 向服务器登记会话。
+  /// 注意：这里【不】打开麦克风硬件 —— 那是 mic_state 信号的事。
+  Future<void> enterStandby() async {
+    if (_state != MicState.idle) return;
+    if (!_networkService.isConnected) {
+      _errorMessage = '请先在首页连接电脑';
+      notifyListeners();
+      return;
+    }
+
+    _state = MicState.starting; // 借"启动中"闪一下，表示正在登记
+    _errorMessage = null;
+    _needsPermission = false;
+    notifyListeners();
+
+    // 守护前台服务：息屏后进程不被杀，服务器的唤醒指令才能随时送达
+    await _micService.startStandbyService();
+
+    // 登记会话：告诉 AudioServer "我上线了，需要我时推 mic_state 唤醒"
+    _networkService.send(jsonEncode({
+      'type': 'mic_start',
+      'sample_rate': 48000,
+      'channels': 1,
+      'format': 'pcm_s16le',
+    }));
+
+    _state = MicState.standby;
+    // 若登记瞬间电脑已经在用（mic_ack 会带 active=true，随后由接线 5 处理），
+    // 这里做一次兜底同步：_serverLive 已被置 true 就直接开麦
+    if (_serverLive && !_muted) {
+      await _openMic();
+    } else {
+      notifyListeners();
+    }
+  }
+
+  /// 打开麦克风硬件并开始上行（只在电脑正在用 & 未静音时被调用）
+  Future<void> _openMic() async {
+    if (_state == MicState.live || _state == MicState.starting) return;
+    _state = MicState.starting;
+    notifyListeners();
+
+    // 权限兜底（正常流程 _autoStandby 已确认；这里防系统撤销权限的极端情况）
+    if (!await _micService.ensurePermission()) {
+      _state = MicState.standby;
+      _needsPermission = true;
+      _errorMessage = '需要录音权限才能当电脑麦克风';
+      notifyListeners();
+      return;
+    }
+
+    // 开原生采集（48kHz 单声道，与 PC 端 mix 格式匹配）
+    final error = await _micService.start(sampleRate: 48000, channels: 1);
+    if (error != null) {
+      _state = MicState.standby; // 开麦失败退回待命，等下一次唤醒再试
+      _errorMessage = _errorText(error);
+      notifyListeners();
+      return;
+    }
+
+    _state = MicState.live;
+    _errorMessage = null;
+    notifyListeners();
+  }
+
+  /// 关闭麦克风硬件，回到待命（电脑停用 / 用户按静音 都会走到这里）
+  Future<void> _closeMic() async {
+    await _micService.stop();
+    _bars.clear();
+    _level = 0;
+    if (_state != MicState.idle) _state = MicState.standby;
+    notifyListeners();
+  }
+
+  /// 手动静音键：通话软件式闭麦 ——
+  /// v3.3 语义升级：按下 = 【真的关掉麦克风硬件】（隐私最彻底），
+  /// 会话保持登记；再按一次：若电脑正在用则立刻重新开麦，否则安静待命。
+  Future<void> toggleMute() async {
+    _muted = !_muted;
+    if (_networkService.isConnected && _sessionEstablished) {
+      _networkService.send(jsonEncode({
+        'type': 'mic_mute',
+        'muted': _muted, // 服务器同步丢弃/恢复注入 + 清残留尾音
+      }));
+    }
+    if (_muted) {
+      _bars.clear();
+      _level = 0;
+      if (_state == MicState.live) {
+        await _closeMic(); // 静音 = 硬件立即关闭
+      } else {
+        notifyListeners();
+      }
+    } else {
+      // 解除静音：电脑正在用则马上恢复采集，否则等下一次 mic_state
+      if (_state == MicState.standby && _serverLive) {
+        await _openMic();
+      } else {
+        notifyListeners();
+      }
+    }
+  }
+
+  /// 首页主按钮 / 详情页大按钮统一入口：启用待命 or 彻底关闭
+  Future<void> toggle() async {
+    if (_state != MicState.idle) {
+      await stop();
+    } else {
+      // 手动启用（含权限申请）：先拿权限，再进待命
+      if (!_networkService.isConnected) {
+        _errorMessage = '请先在首页连接电脑';
+        notifyListeners();
+        return;
+      }
+      if (!await _micService.ensurePermission()) {
+        _needsPermission = true;
+        _errorMessage = '需要录音权限才能当电脑麦克风';
+        notifyListeners();
+        return;
+      }
+      _needsPermission = false;
+      await enterStandby();
+    }
+  }
+
+  /// 彻底关闭：注销会话 + 停采集 + 撤守护通知
+  Future<void> stop() async {
+    if (_networkService.isConnected && _sessionEstablished) {
+      _networkService.send(jsonEncode({'type': 'mic_stop'}));
+    }
+    await _micService.stop();
+    await _micService.stopStandbyService();
+    _sessionEstablished = false;
+    _serverLive = false;
+    _muted = false;
+    _state = MicState.idle;
+    _bars.clear();
+    _level = 0;
+    notifyListeners();
+  }
+
+  /// 原生错误码 → 中文提示（界面显示用）
+  String _errorText(String code) {
+    switch (code) {
+      case 'PERMISSION_DENIED':
+        return '录音权限被拒绝，请在系统设置中允许';
+      case 'INIT_FAILED':
+        return '麦克风被其他应用占用，关闭后重试';
+      case 'BAD_BUFFER':
+        return '不支持的采样率/声道组合';
+      default:
+        return '麦克风启动失败: $code';
+    }
+  }
+
+  /// 销毁清理：取消订阅 + 停采集 + 停服务（防泄漏的标准收尾）
+  @override
+  void dispose() {
+    _statusSubscription?.cancel();
+    _ackSubscription?.cancel();
+    _micService.dispose();
+    super.dispose();
+  }
+}

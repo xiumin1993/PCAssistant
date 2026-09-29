@@ -1,5 +1,7 @@
 allprojects {
     repositories {
+        maven { url = uri("https://maven.aliyun.com/repository/google") }
+        maven { url = uri("https://maven.aliyun.com/repository/central") }
         google()
         mavenCentral()
     }
@@ -23,6 +25,11 @@ subprojects {
     }
 }
 
+// 【重要】把 Gradle 输出重定向回项目根的 build/ 目录（Flutter 模板标准配置）。
+// flutter build 命令只认 <项目根>/build/app/outputs/flutter-apk/*.apk，
+// 注释掉这段会导致：Gradle 明明编译成功（APK 在 android/app/build/ 里），
+// flutter 却找不到文件报"failed to produce an .apk"，并让旧 APK 文件
+// 假装构建成功 —— 手机上装的一直是旧包，排查了半天。勿再注释！
 val newBuildDir: Directory =
     rootProject.layout.buildDirectory
         .dir("../../build")

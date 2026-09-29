@@ -86,14 +86,6 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "6.0.0"
-  flutter_pcm_sound:
-    dependency: "direct main"
-    description:
-      name: flutter_pcm_sound
-      sha256: "15c6894da8195122001375084d51449bd77849579c93fca2800c00b615699dc0"
-      url: "https://pub.flutter-io.cn"
-    source: hosted
-    version: "3.3.3"
   flutter_test:
     dependency: "direct dev"
     description: flutter
@@ -136,14 +128,6 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "6.1.0"
-  logger:
-    dependency: "direct main"
-    description:
-      name: logger
-      sha256: "2a0dc097e7b01d942475bdd552356db2d0f768b05540bd4b2b53f1840f2239a7"
-      url: "https://pub.flutter-io.cn"
-    source: hosted
-    version: "2.8.0"
   matcher:
     dependency: transitive
     description:

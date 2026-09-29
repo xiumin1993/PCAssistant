@@ -22,6 +22,8 @@ import 'package:provider/provider.dart';
 // 导入本项目自己的文件（相对路径导入）
 import 'app.dart';                        // 应用的根 Widget，负责配置主题、路由
 import 'providers/connection_provider.dart'; // 管理"连接状态"的逻辑中心
+import 'providers/mic_provider.dart';     // 管理"手机麦克风模式"的逻辑中心
+import 'providers/camera_provider.dart';  // 管理"手机摄像头模式"的逻辑中心（v3.4）
 import 'services/audio_service.dart';     // 负责播放音频流
 import 'services/network_service.dart';   // 负责 WebSocket 网络连接
 
@@ -82,6 +84,33 @@ void main() {
           create: (context) => ConnectionProvider(
             networkService: context.read<NetworkService>(),
             audioService: context.read<AudioService>(),
+          ),
+        ),
+
+        // --------------------------------------------------------------------
+        // 服务 4：麦克风状态管理器（手机麦克风模式的核心逻辑层）
+        // --------------------------------------------------------------------
+        // 同样用 ChangeNotifierProvider：MicProvider 内部状态
+        // （idle/starting/live、音量条、错误信息）一变，
+        // mic_screen.dart 里的 Consumer 就自动刷新界面。
+        //
+        // 它只需要 NetworkService（用来把录音字节发上 WebSocket、
+        // 监听服务器的 mic_ack），不依赖音频播放服务。
+        ChangeNotifierProvider<MicProvider>(
+          create: (context) => MicProvider(
+            networkService: context.read<NetworkService>(),
+          ),
+        ),
+
+        // --------------------------------------------------------------------
+        // 服务 5：摄像头状态管理器（手机摄像头模式的核心逻辑层，v3.4）
+        // --------------------------------------------------------------------
+        // 与 MicProvider 同款结构：待命/取景/冻结状态一变，
+        // camera_screen.dart 与首页区块自动刷新。
+        // 双入口启用（手机开关 or PC 请求+手机确认）的逻辑都住在这里。
+        ChangeNotifierProvider<CameraProvider>(
+          create: (context) => CameraProvider(
+            networkService: context.read<NetworkService>(),
           ),
         ),
       ],

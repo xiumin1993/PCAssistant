@@ -108,6 +108,24 @@ class NetworkService {
   final _audioDataController = StreamController<Uint8List>.broadcast(); // 音频字节广播
   final _audioConfigController = StreamController<AudioConfig>.broadcast(); // 音频配置广播
   final _errorController = StreamController<String>.broadcast(); // 错误消息广播
+  // v3：服务器对 mic_start 的回执（"mic_ack"）广播。
+  // MicProvider 订阅它，收到才把界面切成"上行中"。
+  final _micAckController = StreamController<String>.broadcast();
+
+  // v3.1：PC 端发来的"麦克风被占用中"开关指令广播（true = 有应用在录 CABLE Output）。
+  // 手机连上电脑后默认只是"待命"（不开录音，省电），
+  // 收到 true 才开始真正采集 —— 这就是"像真麦克风一样自动待命"的实现。
+  final _micStateController = StreamController<bool>.broadcast();
+
+  // ── v3.4 摄像头指令管道 ─────────────────────────────────────
+  // cam_ack      服务器对 cam_start 登记的回执（可附带 active 字段）
+  final _camAckController = StreamController<String>.broadcast();
+  // cam_state    PC 是否有应用正在观看虚拟摄像头（true → 手机该开相机）
+  final _camStateController = StreamController<bool>.broadcast();
+  // cam_request  PC 端 GUI 点了"请求手机开启摄像头" → 手机弹确认
+  final _camRequestController = StreamController<void>.broadcast();
+  // cam_stop(forced)  PC 端"强制关闭"隐私开关 → 手机立即注销摄像头会话
+  final _camForceStopController = StreamController<void>.broadcast();
 
   // 内部维护的"当前状态"变量，带 _ 前缀表示私有（类外不可见）。
   // Dart 没有 public/private 关键字，用下划线前缀约定私有成员。
@@ -128,6 +146,24 @@ class NetworkService {
 
   /// 错误信息流：发生错误时，人类可读的错误描述从这里流出
   Stream<String> get errorStream => _errorController.stream;
+
+  /// v3：mic_ack 回执流（服务器确认已开启手机麦克风上行）
+  Stream<String> get micAckStream => _micAckController.stream;
+
+  /// v3.1：mic_state 指令流（true = PC 应用正在用麦克风 → 手机该上行；false → 回待命）
+  Stream<bool> get micStateStream => _micStateController.stream;
+
+  /// v3.4：cam_ack 回执流（服务器确认摄像头会话已登记）
+  Stream<String> get camAckStream => _camAckController.stream;
+
+  /// v3.4：cam_state 指令流（true = PC 应用正在观看 → 手机开相机；false = 回待命）
+  Stream<bool> get camStateStream => _camStateController.stream;
+
+  /// v3.4：cam_request 指令流（PC GUI 请求手机开启摄像头，手机需用户确认）
+  Stream<void> get camRequestStream => _camRequestController.stream;
+
+  /// v3.4：cam_stop(forced) 指令流（PC GUI 强制关闭 → 手机立即注销会话）
+  Stream<void> get camForceStopStream => _camForceStopController.stream;
 
   /// 当前连接状态（快照式读取，不走流）
   ConnectionStatus get status => _status;
@@ -180,7 +216,7 @@ class NetworkService {
       _subscription = _channel!.stream.listen(
         (data) {
           if (data is String) {
-            // 【文本帧：JSON 音频配置】
+            // 【文本帧：JSON 音频配置 / mic 回执 / mic 开关指令】
             try {
               final json = jsonDecode(data);
               if (json is Map && json['type'] == 'audio_config') {
@@ -190,6 +226,39 @@ class NetworkService {
                   format: json['format'] as String? ?? 'pcm_s16le',
                 );
                 _audioConfigController.add(config);
+              } else if (json is Map && json['type'] == 'mic_ack') {
+                // v3：服务器确认收到 mic_start，手机麦克风上行已建立
+                _micAckController.add('mic_ack');
+                // v3.1：回执可附带 active 字段 —— 若 PC 应用已在录，
+                // 立刻按"上行中"处理，不用等下一条 mic_state
+                final active = json['active'];
+                if (active is bool) _micStateController.add(active);
+              } else if (json is Map && json['type'] == 'mic_state') {
+                // v3.1：PC 端自动感知指令。true = 有应用打开了 CABLE Output
+                //（相当于"有人按下对讲机"），手机应立即开始上行；
+                // false = 应用关闭了麦克风，手机回到省电待命。
+                final active = json['active'];
+                if (active is bool) _micStateController.add(active);
+              } else if (json is Map && json['type'] == 'cam_ack') {
+                // v3.4：服务器确认摄像头会话已登记
+                _camAckController.add('cam_ack');
+                // 回执附带 active 字段：登记时 PC 已在观看 → 立刻按"取景中"处理
+                final active = json['active'];
+                if (active is bool) _camStateController.add(active);
+              } else if (json is Map && json['type'] == 'cam_state') {
+                // v3.4：PC 应用打开/关闭了 Unity Video Capture 虚拟摄像头。
+                // true = 有人正在观看 → 手机此刻才开相机硬件；
+                // false = 没人看了 → 手机立即关相机回待命（按需取景，省电+隐私）
+                final active = json['active'];
+                if (active is bool) _camStateController.add(active);
+              } else if (json is Map && json['type'] == 'cam_request') {
+                // v3.4：PC GUI 点了"请求手机开启摄像头" → 手机弹确认框
+                _camRequestController.add(null);
+              } else if (json is Map &&
+                  json['type'] == 'cam_stop' &&
+                  json['forced'] == true) {
+                // v3.4：PC GUI 的"强制关闭"隐私开关 → 手机立即注销会话
+                _camForceStopController.add(null);
               }
             } catch (_) {
               // JSON 解析失败，忽略无效数据
@@ -269,5 +338,11 @@ class NetworkService {
     _audioDataController.close();
     _audioConfigController.close();
     _errorController.close();
+    _micAckController.close();
+    _micStateController.close(); // v3.1：关闭 mic_state 指令管道
+    _camAckController.close(); // v3.4：关闭摄像头四条管道
+    _camStateController.close();
+    _camRequestController.close();
+    _camForceStopController.close();
   }
 }
