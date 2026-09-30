@@ -213,6 +213,36 @@ class MainActivity : FlutterActivity() {
         micServiceStarted = false
     }
 
+    /**
+     * v3.7 国际化：语言切换后，把"已经在挂着"的常驻通知重发一遍。
+     *
+     * 为什么需要这一步：前台服务的通知是在 onStartCommand 里用当时的语言建好的，
+     * 之后 App 内换语言并不会自动回去改它 —— 不重发就会出现"界面已中文、
+     * 通知栏还是英文"的割裂，只有断开重连才纠正。
+     *
+     * 为什么直接再 startService 就够：服务已在运行时，startService 不会重建服务，
+     * 只是再回调一次 onStartCommand；而 startForeground(同一个 id, 新通知)
+     * 的语义就是"原地更新这条通知"。所以状态机（有没有在录音/开相机）完全不受影响。
+     *
+     * 为什么用 flag 判断而不是查系统：micServiceStarted / camServiceStarted 就是
+     * 本 App 自己启停这两个服务的唯一入口，它们为 true 等价于服务在跑，
+     * 比反射查 ActivityManager 轻得多也可靠得多。
+     */
+    private fun refreshGuardNotifications() {
+        // 仍走 O+ 分支：对已运行的服务，startForegroundService 同样安全，
+        // 且能避免万一进程刚被回收时踩到后台启动限制。
+        fun again(cls: Class<out Service>) {
+            val intent = Intent(this, cls)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+        }
+        if (micServiceStarted) again(MicForegroundService::class.java)
+        if (camServiceStarted) again(CamForegroundService::class.java)
+    }
+
     override fun configureFlutterEngine(flutterEngine: io.flutter.embedding.engine.FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
@@ -364,7 +394,10 @@ class MainActivity : FlutterActivity() {
                 // v3.7 国际化：Flutter 切换界面语言时同步过来，让通知栏文案
                 // 与 App 内语言一致（code = "auto" / "en" / "zh"）。
                 "setLocale" -> {
+                    // 顺序不能反：先落盘，再刷新 —— refreshGuardNotifications()
+                    // 里的 localized() 要读到刚存的这个值。
                     AppLocale.save(this, call.argument<String>("code"))
+                    refreshGuardNotifications()
                     result.success(true)
                 }
 
