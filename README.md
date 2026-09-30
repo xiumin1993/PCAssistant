@@ -131,12 +131,19 @@ design/                          UI 设计稿（HTML）
 
 | 位置 | 文件 | 说明 |
 |------|------|------|
-| 安卓通知栏（麦克风/摄像头待命）+ 桌面应用名 | `android/app/src/main/res/values/strings.xml`（英文默认）、`values-zh/strings.xml`（中文） | App 内切语言时通过 `com.pcspeaker/audio` 通道的 `setLocale` 同步给 `AppLocale.kt`，写进 SharedPreferences，服务下次起前台通知即用新语言。已知限制：**通知渠道名**在渠道创建那刻被系统记住，换语言只改标题正文，渠道名要重装 App 才更新（安卓硬规则，删了的渠道名不能再建） |
+| 安卓通知栏（麦克风/摄像头待命）+ 桌面应用名 | `android/app/src/main/res/values/strings.xml`（英文默认）、`values-zh/strings.xml`（中文） | App 内切语言时通过 `com.pcspeaker/audio` 通道的 `setLocale` 同步给 `AppLocale.kt`，写进 SharedPreferences；`MainActivity.refreshGuardNotifications()` 随即把**正在挂着的那条常驻通知原地重发**一遍（服务已在跑时 `startService` 只回调 `onStartCommand`，`startForeground` 同 id 即"更新这条通知"，不影响录音/相机状态机），所以换语言**不需要断开重连**。已知限制：**通知渠道名**在渠道创建那刻被系统记住，换语言只改标题正文，渠道名要重装 App 才更新（安卓硬规则，删了的渠道名不能再建） |
 | iOS 权限弹窗文案 | `ios/Runner/Info.plist` 的两条 `...UsageDescription` | 本版是**双语一行**写法。正式做法是拆成 `en.lproj / zh-Hans.lproj` 的 `InfoPlist.strings`，那需要在 Xcode 工程里建 variant group（改 `project.pbxproj`）；本仓库无 Mac/Xcode 无法验证，留待 Mac 侧再拆 |
+
+**"系统语言"那一行说的是系统，不是用户的选择。** 语言弹层里"跟随系统"下面的小提示，
+取的是 `LanguageProvider.systemCode`（只看设备语言），**不是** `effectiveCode`
+（界面当前真正用的语言）。两者混用会写出"用户手动选了英文 → 提示却说
+`System language detected: English`"这种谎话：手机明明是中文系统。
+`_systemLocale` 之所以可信：安卓侧只在**构造通知**时用了 `localized()` 包装的 Context，
+并没有重写 Activity 的 `attachBaseContext`，Flutter 拿到的仍是设备真实语言。
 
 **不翻译的东西**（全球通用，两种语言写法完全一致）：WiFi / USB / IP / WebSocket /
 PCM / Hz / kHz / kbps / fps / ms / kB / MB、数字与分辨率（`1280×720 @ 30fps`）、
-品牌名 "PC Assistant / AudioServer / AudioServer"、以及语言名本身
+品牌名 "PC Assistant / AudioServer"、以及语言名本身
 （"简体中文"永远写作"简体中文"、"English"永远写作 "English" —— 全球软件通行惯例，
 用户只有用自己的母语才认得出自己的语言）。
 

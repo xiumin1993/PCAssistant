@@ -72,6 +72,20 @@ class LanguageProvider extends ChangeNotifier {
     return _resolveFromSystem();
   }
 
+  /// 手机【系统】语言被识别成我们的哪一档（'en' / 'zh'）—— 与用户的手动选择无关。
+  ///
+  /// 为什么不复用 effectiveCode？
+  ///   effectiveCode 是"界面现在用什么语言"，用户手动指定英文后它就是 'en'。
+  ///   而这一行的语义是"跟随系统会跟到哪儿"，必须只看系统本身。
+  ///   两者混用会导致英文界面上写着 "System language detected: English"，
+  ///   而手机其实是中文系统 —— 把用户的选择谎报成系统的选择。
+  ///
+  /// 为什么 _systemLocale 可信：
+  ///   安卓原生层只在【构造通知】时用了 localized() 包装过的 Context，
+  ///   并没有重写 Activity 的 attachBaseContext，
+  ///   所以 Flutter 拿到的 platformDispatcher.locale 始终是设备真实语言。
+  String get systemCode => _resolveFromSystem();
+
   /// 语言的显示名 —— 注意这里【故意不翻译】。
   /// 语言列表里"简体中文"永远写作"简体中文"、"English"永远写作"English"，
   /// 这是全球软件的通行做法：用户用自己的母语才认得出自己的语言，

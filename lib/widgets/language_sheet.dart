@@ -99,9 +99,11 @@ class _LanguageSheet extends StatelessWidget {
                 ),
                 // "跟随系统"下面补一行：系统语言被识别成了什么，
                 // 用户才知道"跟随"到底跟到了哪儿。
+                // 用 systemCode 而不是 effectiveCode：这行说的是【手机系统】，
+                // 不是"我现在手动选了什么"（详见 LanguageProvider.systemCode）。
                 subtitle: choice == LanguageChoice.auto
                     ? Text(
-                        l10n.langAutoCurrent(_nativeName(lang.effectiveCode)),
+                        l10n.langAutoCurrent(_nativeName(lang.systemCode)),
                         style: const TextStyle(
                             fontSize: 11, color: Colors.black54, height: 1.4),
                       )
