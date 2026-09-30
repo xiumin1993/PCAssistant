@@ -33,6 +33,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/audio_service.dart';   // 音频服务
 import '../services/network_service.dart';  // 网络服务（含 ConnectionStatus 枚举）
 
+/// 连接模式：WiFi 需要完整 IP:端口，USB 只需端口（IP 固定 127.0.0.1）
+enum ConnectionMode { wifi, usb }
+
 /// 连接状态管理
 class ConnectionProvider extends ChangeNotifier {
   // --------------------------------------------------------------------------
@@ -57,6 +60,9 @@ class ConnectionProvider extends ChangeNotifier {
   // --------------------------------------------------------------------------
   String _serverAddress = ''; // 服务器地址（持久化用的原始值）
 
+  // 连接模式：WiFi 需要填完整 IP:端口，USB 只需填端口（IP 固定 127.0.0.1）
+  ConnectionMode _connectionMode = ConnectionMode.wifi;
+
   // 注意：这个字段和 NetworkService 里的枚举是同一个类型（import 过来的），
   // 两个类共享一份枚举定义，保证语义一致。
   ConnectionStatus _connectionStatus = ConnectionStatus.disconnected;
@@ -70,6 +76,9 @@ class ConnectionProvider extends ChangeNotifier {
   ///   写 —— controller.text = 'xxx'（回填历史地址）
   /// 由 Provider 持有而不是界面持有，界面销毁重建后输入内容也不会丢。
   final TextEditingController _serverAddressController = TextEditingController();
+
+  /// USB 模式下的端口输入控制器，默认 8080。
+  final TextEditingController _usbPortController = TextEditingController(text: '8080');
 
   /// 构造函数。
   /// required 关键字：调用时必须传这两个参数（见 main.dart 的注入代码）。
@@ -152,8 +161,10 @@ class ConnectionProvider extends ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
   TextEditingController get serverAddressController => _serverAddressController;
+  TextEditingController get usbPortController => _usbPortController;
+  ConnectionMode get connectionMode => _connectionMode;
 
-  /// v3.4.4：USB 有线直连 —— 一键把地址填成本机回环 127.0.0.1:8080。
+  /// v3.4.5：USB 有线直连 —— 切换到 USB 模式，自动用 127.0.0.1 + 端口发起连接。
   ///
   /// 原理：手机用 USB 线插到电脑上后，在电脑执行一条命令
   ///   adb reverse tcp:8080 tcp:8080
@@ -162,9 +173,38 @@ class ConnectionProvider extends ChangeNotifier {
   /// 完全不走 WiFi —— 延迟更低、不受无线网络波动影响，适合对
   /// 实时性要求最苛刻的场景。
   /// （对比 adb forward：forward 是"电脑连手机的端口"，方向相反，别搞混）
-  void fillUsbAddress() {
-    _serverAddressController.text = '127.0.0.1:8080';
-    _serverAddress = '127.0.0.1:8080';
+  ///
+  /// 用户只需点一下这个按钮，自动填好端口并直接连接，无需再点"连接"。
+  Future<void> connectUsb() async {
+    _connectionMode = ConnectionMode.usb;
+    notifyListeners();
+    // 用 USB 端口拼接完整地址：127.0.0.1:{port}
+    final port = _usbPortController.text.trim();
+    if (port.isEmpty) {
+      _errorMessage = '请输入端口号';
+      notifyListeners();
+      return;
+    }
+    final address = '127.0.0.1:$port';
+    _serverAddressController.text = address;
+    _serverAddress = address;
+    notifyListeners();
+    // 自动发起连接，省去用户再点一次"连接"按钮
+    await toggleConnection();
+  }
+
+  /// WiFi 模式：恢复上次保存的服务器地址（不清空），切换回完整地址输入。
+  /// 用户从 USB 切回 WiFi 时，不需要重新输入，上次填的 IP 还在。
+  Future<void> restoreWifiAddress() async {
+    _connectionMode = ConnectionMode.wifi;
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString('server_address') ?? '';
+    // 如果上次保存的是 USB 回环地址，说明没有真正的 WiFi 历史，
+    // 就留空让用户自己填；否则恢复历史地址
+    if (saved.isNotEmpty && !saved.startsWith('127.0.0.1')) {
+      _serverAddressController.text = saved;
+      _serverAddress = saved;
+    }
     notifyListeners();
   }
 
@@ -232,6 +272,7 @@ class ConnectionProvider extends ChangeNotifier {
     _errorSubscription?.cancel();
     // 再释放文本控制器（它内部也持有监听资源）
     _serverAddressController.dispose();
+    _usbPortController.dispose();
     // 最后调用父类的 dispose —— 固定套路，永远放在最末
     super.dispose();
   }

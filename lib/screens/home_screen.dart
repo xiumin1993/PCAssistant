@@ -158,30 +158,59 @@ class HomeScreen extends StatelessWidget {
                   const SizedBox(height: 48),
 
                   // ==========================================================
-                  // ③ 服务器地址输入框
+                  // ③ 服务器地址输入框（根据连接模式显示不同内容）
                   // ==========================================================
-                  // SizedBox 固定宽度 300：大屏上 TextField 会被拉到
-                  // 全宽，限宽后视觉更聚焦。
+                  // WiFi 模式：显示完整的 IP:端口 输入框
+                  // USB 模式：只显示端口输入框（IP 固定 127.0.0.1）
                   SizedBox(
                     width: 300,
-                    child: TextField(
-                      // controller 连接 Provider 持有的文本控制器：
-                      //   用户每敲一个字 → 自动存进 controller.text；
-                      //   Provider 启动时回填的历史地址 → 立刻显示。
-                      // 界面不需要自己管理"输入了什么"。
-                      controller: provider.serverAddressController,
-                      // InputDecoration：输入框的外观配置（Material 规范）
-                      decoration: const InputDecoration(
-                        labelText: '电脑服务器地址',       // 悬浮标签
-                        hintText: '例如: 192.168.1.100:8080', // 占位提示
-                        prefixIcon: Icon(Icons.computer),   // 左侧图标
-                        // 带圆角边框的样式（默认是下划线样式）
-                        border: OutlineInputBorder(),
-                      ),
-                      // 已连接时禁止编辑地址（防止改了一半误导）。
-                      // enabled=false 会让输入框自动变灰，无需额外样式。
-                      enabled: !provider.isConnected,
-                    ),
+                    child: provider.connectionMode == ConnectionMode.wifi
+                        ? TextField(
+                            // WiFi 模式：完整地址输入
+                            controller: provider.serverAddressController,
+                            decoration: const InputDecoration(
+                              labelText: '电脑服务器地址',
+                              hintText: '例如: 192.168.1.100:8080',
+                              prefixIcon: Icon(Icons.computer),
+                              border: OutlineInputBorder(),
+                            ),
+                            enabled: !provider.isConnected,
+                          )
+                        : Row(
+                            // USB 模式：固定 IP + 端口输入
+                            children: [
+                              Expanded(
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 16,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    border: Border.all(color: Colors.grey.shade400),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: const Text(
+                                    '127.0.0.1:',
+                                    style: TextStyle(color: Colors.black54),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              SizedBox(
+                                width: 100,
+                                child: TextField(
+                                  controller: provider.usbPortController,
+                                  decoration: const InputDecoration(
+                                    labelText: '端口',
+                                    hintText: '8080',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  // 端口只允许数字
+                                  keyboardType: TextInputType.number,
+                                  enabled: !provider.isConnected,
+                                ),
+                              ),
+                            ],
+                          ),
                   ),
                   const SizedBox(height: 12),
 
@@ -201,22 +230,23 @@ class HomeScreen extends StatelessWidget {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         OutlinedButton.icon(
+                          // USB 有线：填入 127.0.0.1:8080 并自动发起连接，
+                          // 用户只需点一下，无需再手动点"连接"按钮。
                           onPressed: provider.isConnected
                               ? null
-                              : provider.fillUsbAddress,
+                              : () => provider.connectUsb(),
                           icon: const Icon(Icons.usb, size: 18),
                           label: const Text('USB 有线直连'),
                         ),
                         const SizedBox(width: 12),
                         OutlinedButton.icon(
+                          // WiFi 模式：恢复上次保存的地址，不清空。
+                          // 从 USB 切回来时，之前填的电脑 IP 还在。
                           onPressed: provider.isConnected
                               ? null
-                              : () {
-                                  // 回到 WiFi 模式：清空地址，让用户填电脑局域网 IP
-                                  provider.serverAddressController.clear();
-                                },
+                              : () => provider.restoreWifiAddress(),
                           icon: const Icon(Icons.wifi, size: 18),
-                          label: const Text('清空重填(WiFi)'),
+                          label: const Text('WiFi 连接'),
                         ),
                       ],
                     ),
