@@ -345,12 +345,10 @@ class CameraProvider extends ChangeNotifier {
     }));
 
     _state = CamState.standby;
-    // 登记瞬间 PC 已在观看（cam_ack 带 active=true 已被接线 4 收到）→ 兜底同步
-    if (_serverLive && !_muted) {
-      await _openCamera();
-    } else {
-      notifyListeners();
-    }
+    // 重置服务器活跃标记：确保新一轮 cam_state:true 不被去重跳过
+    // （断线重连场景：_serverLive 可能还是上次的 true，不重置会卡死在待命）
+    _serverLive = false;
+    notifyListeners();
   }
 
   /// 从能力清单里给当前镜头挑"最高档"：
