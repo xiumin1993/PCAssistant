@@ -525,6 +525,13 @@ class CameraProvider extends ChangeNotifier {
   /// @param silent true = 不主动给服务器发 cam_stop
   ///               （PC 强制关闭场景：那边已经关了，不用再回执）
   Future<void> stop({bool silent = false}) async {
+    // v3.4.12：注销 = 用户不再要这个守护了，【意图】也要一起清掉。
+    // 之前只有 toggle() 关闭分支会清 _guardWanted，而首页"摄像头守护"开关
+    // 关闭走的是 stop()（见 home_screen.dart）→ 意图位残留 true，
+    // 于是断线重连后 App 会自作主张把相机会话重新登记回去，
+    // 电脑一开虚拟摄像头手机就悄悄开机 —— 违背用户刚刚亲手关掉的事实。
+    // 隐私类状态必须"关了就真关了"，所以在这里统一清（幂等，多处调用无害）。
+    _guardWanted = false;
     if (!silent && _networkService.isConnected && _sessionEstablished) {
       _networkService.send(jsonEncode({'type': 'cam_stop'}));
     }
