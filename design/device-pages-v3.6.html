@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>首页 + 三个设备详情页 视觉稿（v3.6 rev2）</title>
+<style>
+  :root{
+    --primary:#0061a4; --primary-soft:#e5f0fa; --ink:#111826; --ink-2:#5b6472;
+    --line:#d7dbe0; --surface:#f4f6f8; --card:#ffffff; --disabled:#b6bcc4;
+    --ok:#0f8a43; --ok-soft:#e3f6ea; --bad:#c62828; --bad-soft:#fdeaea;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--surface);color:var(--ink);
+       font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;padding:26px}
+  h1{font-size:20px;margin:0 0 4px}
+  h2{font-size:14px;margin:26px 0 10px}
+  .sub{color:var(--ink-2);font-size:13px;margin-bottom:18px;line-height:1.7}
+  .row{display:flex;gap:18px;flex-wrap:wrap}
+  .col{width:336px}
+  .label{font-size:13px;font-weight:600;margin:0 0 8px}
+  .note{font-size:12px;color:var(--ink-2);margin-top:9px;line-height:1.65}
+  .phone{background:var(--card);border:1px solid var(--line);border-radius:18px;
+         padding:0 0 18px;box-shadow:0 2px 10px rgba(16,24,40,.06);overflow:hidden}
+  .appbar{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line);
+          background:#fff;font-size:15px;font-weight:700}
+  .appbar .back{color:var(--ink-2);font-weight:400}
+  .appbar .sp{margin-left:auto}
+  .chip{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700}
+  .chip.standby{background:#f1f4f7;color:var(--ink-2)}
+  .chip.live{background:var(--ok-soft);color:var(--ok)}
+  .chip.off{background:var(--bad-soft);color:var(--bad)}
+  .chip.rec{background:var(--bad);color:#fff}
+  .body{padding:14px 15px 0}
+  .blk{border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:12px;background:#fff}
+  .bt{display:flex;align-items:center;gap:10px}
+  .bt .t{font-size:14px;font-weight:700}
+  .bt .d{font-size:11.5px;color:var(--ink-2);margin-top:2px;line-height:1.55}
+
+  /* ── 禁用块：状态用大字+底色明说，不靠滑块颜色猜 ── */
+  .gate{border-radius:12px;padding:13px;margin-bottom:12px;border:1.5px solid var(--ok);background:var(--ok-soft)}
+  .gate.dis{border-color:var(--bad);background:var(--bad-soft)}
+  .gate .head{display:flex;align-items:center;gap:9px}
+  .gate .state{font-size:17px;font-weight:800;color:var(--ok);letter-spacing:.5px}
+  .gate.dis .state{color:var(--bad)}
+  .gate .ic{font-size:20px}
+  .gate .sub{font-size:11.5px;color:var(--ink-2);margin-top:7px;line-height:1.6;text-align:left}
+  .gate .sw{margin-left:auto}
+  .gate .rowlab{display:flex;justify-content:space-between;font-size:11px;color:var(--ink-2);
+                margin-top:9px;font-weight:700}
+  .gate .rowlab .r{color:var(--bad)}
+  .gate .rowlab .g{color:var(--ok)}
+  .sw{width:46px;height:27px;border-radius:999px;background:var(--ok);position:relative;flex:none}
+  .sw i{position:absolute;top:3px;right:3px;width:21px;height:21px;border-radius:50%;background:#fff}
+  .sw.en{background:var(--primary)}
+  .sw.en i{right:auto;left:3px}
+  /* 已禁用：滑块整块转红，圆点停在左侧"禁用"一端 */
+  .gate.dis .sw{background:var(--bad)}
+
+  .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:10px}
+  .cell{background:#f7f9fb;border:1px solid var(--line);border-radius:8px;padding:8px 6px;text-align:center}
+  .cell .k{font-size:10.5px;color:var(--ink-2)}
+  .cell .v{font-size:13px;font-weight:700;margin-top:3px}
+  .seg2{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-top:8px}
+  .seg2 div{flex:1;text-align:center;padding:9px 2px;font-size:12.5px;color:var(--ink-2);
+            border-right:1px solid var(--line);background:#fff}
+  .seg2 div:last-child{border-right:0}
+  .seg2 div.on{background:var(--primary-soft);color:var(--primary);font-weight:700}
+  .drop{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;
+        padding:9px 11px;font-size:13px;margin-top:8px;background:#fff}
+  .drop .sp{margin-left:auto;color:var(--ink-2)}
+  .slider{margin-top:10px}
+  .slider .cap{display:flex;justify-content:space-between;font-size:11px;color:var(--ink-2);margin-bottom:6px}
+  .slider .ln{height:4px;border-radius:2px;background:var(--line);position:relative}
+  .slider .ln b{position:absolute;left:0;top:0;bottom:0;width:78%;background:var(--primary);border-radius:2px}
+  .slider .ln i{position:absolute;left:78%;top:-6px;width:16px;height:16px;border-radius:50%;
+                background:#fff;border:2px solid var(--primary);transform:translateX(-8px)}
+  .btn{padding:12px;border-radius:8px;text-align:center;font-size:14px;font-weight:700;background:var(--primary);color:#fff}
+  .btn.out{background:#fff;color:var(--primary);border:1.5px solid var(--primary)}
+  .btn.red{background:#fff;color:var(--bad);border:1.5px solid var(--bad)}
+  .btn.grey{background:#eef1f4;color:var(--ink-2);font-weight:600}
+  .btnrow{display:flex;gap:10px;margin-top:10px}
+  .btnrow .btn{flex:1;padding:11px 4px;font-size:13px}
+  /* 参数区下方的一行说明：告诉用户"现在改会不会生效、什么时候生效" */
+  .hint{margin-top:8px;font-size:11px;line-height:1.6;color:var(--ink-2);
+        background:#f6f8fb;border-radius:6px;padding:6px 8px}
+  .meter{display:flex;gap:3px;align-items:flex-end;height:34px;margin-top:10px}
+  .meter span{flex:1;background:var(--primary-soft);border:1px solid #cfe0f0;border-radius:2px}
+
+  /* 取景框：摄像头页最上方 */
+  .view{border:1px solid var(--line);border-radius:12px;background:
+        linear-gradient(135deg,#cfd8e3 0%,#aebfd3 45%,#8fa6c0 100%);height:172px;position:relative;
+        display:flex;align-items:flex-end;padding:8px;margin-bottom:12px}
+  .view .rec{position:absolute;top:8px;left:8px}
+  .view .tap{position:absolute;top:8px;right:8px;font-size:11px;color:#fff;background:rgba(0,0,0,.35);
+             padding:3px 8px;border-radius:999px}
+  .view .stamp{font-size:11px;color:#fff;background:rgba(0,0,0,.42);padding:3px 8px;border-radius:6px}
+  .view.idle{background:repeating-linear-gradient(135deg,#e9edf1,#e9edf1 12px,#dfe5ea 12px,#dfe5ea 24px);
+             align-items:center;justify-content:center}
+  .view.idle .txt{font-size:12.5px;color:var(--ink-2);background:rgba(255,255,255,.85);
+                  padding:6px 12px;border-radius:8px}
+
+  .dev{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:12px;
+       padding:12px;margin-bottom:10px;background:#fff}
+  .dev .ic{font-size:20px}
+  .dev .t{font-size:13.5px;font-weight:700}
+  .dev .d{font-size:11px;color:var(--ink-2)}
+  .dev .chev{margin-left:auto;color:var(--disabled)}
+  .status{font-size:14px;font-weight:700}
+  .status.live{color:var(--ok)}
+  .status.standby{color:var(--ink-2)}
+  .statusline{display:flex;align-items:center;gap:8px}
+  .statusline .sp{margin-left:auto}
+  .icon-lg{font-size:40px;text-align:center;color:var(--primary);line-height:1}
+  .bigstat{text-align:center;font-size:20px;font-weight:700;margin:6px 0 2px}
+  .bigstat.on{color:var(--primary)}
+  .bigsub{text-align:center;font-size:12.5px;color:var(--ink-2);margin-bottom:14px}
+  .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin:0 0 12px}
+  .seg div{flex:1;text-align:center;padding:9px 2px;font-size:12.5px;color:var(--ink-2);
+           border-right:1px solid var(--line);background:#fff;position:relative}
+  .seg div:last-child{border-right:0}
+  .seg div.sel{background:#f1f4f7;font-weight:700;color:var(--ink)}
+  .seg div.ok{background:var(--ok-soft);color:var(--ok);font-weight:700}
+  .seg div.sel::after{content:"";position:absolute;left:8px;right:8px;bottom:3px;height:2px;
+                      border-radius:2px;background:var(--ink)}
+  .why{background:#fbfcfd;border-left:3px solid var(--line);padding:8px 10px;font-size:11.5px;
+       color:var(--ink-2);line-height:1.6;border-radius:0 6px 6px 0}
+  .why b{color:var(--ink)}
+  .del{text-decoration:line-through;color:var(--bad);font-weight:700}
+</style>
+</head>
+<body>
+
+<h1>设备中心改版 · 首页 + 三个设备详情页（v3.6 rev3）</h1>
+<div class="sub">
+  rev3 三处改动（摄像头页）：<b>① 「通道：Unity / OBS」状态块整个删除</b>——两条虚拟摄像头通道是电脑侧的实现细节，
+  手机上不需要看见，"谁在用"由顶栏徽标（待命 / 使用中）说清楚就够了；
+  <b>② 摄像头页的「后台守护」也删了</b>（麦克风页上轮已删）——现在整个 App 里不再有守护开关，
+  手动禁用滑块是唯一的手动闸；
+  <b>③ 取景框仍然在最上方</b>，删掉两块之后它上面只剩顶栏，进来第一眼就是画面。
+</div>
+<div class="sub" style="margin-top:6px">
+  <b>rev3.1 追加纠正：</b>待命页的<b>参数区不再置灰</b>——清晰度、镜头、旋转<b>任何时候都可以改</b>（待命中改=更新登记，使用中改=重启相机套用，未连接改=存偏好）。
+  只有「已禁用」态才锁参数。之前把待命的清晰度画成不可改是我判断错了：能力探测根本不用开相机，档位表一直拿得到。
+</div>
+<div class="sub" style="margin-top:6px">
+  rev2 已落实、本轮保留：麦克风页删「后台守护 + 静音」；禁用块"状态明说"（大字「已启用 · 待命 / 已启用 · 使用中 / 已禁用」+ 绿底/红底 + 两端"启用/禁用"字样）；页面内不再有"启用/停止"类按钮。
+</div>
+
+<div class="row">
+
+  <!-- ══════════════ 首页 ══════════════ -->
+  <div class="col">
+    <p class="label">① 首页：连接三 Tab + 三个设备入口</p>
+    <div class="phone">
+      <div class="appbar"><span>PC Speaker</span><span class="sp"></span><span class="chip live">WiFi ✓</span></div>
+      <div class="body">
+        <div class="icon-lg">🔌</div>
+        <div class="bigstat on">已连接</div>
+        <div class="bigsub">WiFi · 192.168.0.103:8080</div>
+
+        <div class="seg">
+          <div class="sel ok">WiFi ✓</div><div>USB</div><div>蓝牙</div>
+        </div>
+
+        <div style="font-size:13px;font-weight:700;margin:2px 0 10px">设备（点进去看状态和参数）</div>
+        <div class="dev"><span class="ic">🔊</span>
+          <div><div class="t">音响（电脑声音 → 手机）</div><div class="d">使用中 · 48kHz · 约 92ms</div></div>
+          <span class="chip live">使用中</span><span class="chev">›</span></div>
+        <div class="dev"><span class="ic">🎙️</span>
+          <div><div class="t">麦克风（手机 → 电脑）</div><div class="d">待命 · 硬件已关闭</div></div>
+          <span class="chip standby">待命</span><span class="chev">›</span></div>
+        <div class="dev"><span class="ic">📷</span>
+          <div><div class="t">摄像头（手机 → 电脑）</div><div class="d">待命 · Unity Video Capture</div></div>
+          <span class="chip standby">待命</span><span class="chev">›</span></div>
+
+        <div class="why" style="margin-top:12px">
+          首页只有<b>入口和状态</b>。设备被禁用时卡片显示 <span class="chip off">已禁用</span>，点进去仍可解禁。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════ 音响页 ══════════════ -->
+  <div class="col">
+    <p class="label">② 音响详情页（启用态 · 使用中）</p>
+    <div class="phone">
+      <div class="appbar"><span class="back">←</span><span>音响</span>
+        <span class="sp"></span><span class="chip live">使用中</span></div>
+      <div class="body">
+
+        <div class="gate">
+          <div class="head">
+            <span class="ic">✅</span>
+            <span class="state">已启用 · 正在播放</span>
+            <span class="sw"><i></i></span>
+          </div>
+          <div class="sub">手机正在播放电脑推过来的系统声音。把右边滑块拨到「禁用」即彻底停止本功能。</div>
+          <div class="rowlab"><span class="r">← 禁用</span><span class="g">启用（默认，待命/使用中）→</span></div>
+        </div>
+
+        <div class="blk">
+          <div class="bt"><span>🔊</span>
+            <div><div class="t">来源：电脑扬声器回环捕获</div>
+              <div class="d">WASAPI Loopback · 电脑不选播放设备也能抓</div></div></div>
+          <div class="grid">
+            <div class="cell"><div class="k">采样率</div><div class="v">48 kHz</div></div>
+            <div class="cell"><div class="k">码率</div><div class="v">320 kbps</div></div>
+            <div class="cell"><div class="k">端到端延迟</div><div class="v">92 ms</div></div>
+          </div>
+        </div>
+
+        <div class="blk">
+          <div class="t" style="font-size:13.5px;font-weight:700">参数</div>
+          <div class="slider">
+            <div class="cap"><span>手机音量</span><span>78%</span></div>
+            <div class="ln"><b></b><i></i></div>
+          </div>
+          <div style="font-size:12px;color:var(--ink-2);margin-top:12px">缓冲档位（延迟 ↔ 卡顿）</div>
+          <div class="seg2"><div>低延迟 60ms</div><div class="on">均衡 120ms</div><div>稳定 240ms</div></div>
+        </div>
+
+        <div class="btn red">静音（保留连接，随时恢复）</div>
+        <div class="why" style="margin-top:12px">
+          音响的静音保留（听与不听是随时要切的），麦克风那个静音按你说的删掉了。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════ 麦克风页 ══════════════ -->
+  <div class="col">
+    <p class="label">③ 麦克风页（守护、静音都已删）</p>
+    <div class="phone">
+      <div class="appbar"><span class="back">←</span><span>麦克风</span>
+        <span class="sp"></span><span class="chip standby">待命</span></div>
+      <div class="body">
+
+        <div class="gate">
+          <div class="head">
+            <span class="ic">✅</span>
+            <span class="state">已启用 · 待命</span>
+            <span class="sw"><i></i></span>
+          </div>
+          <div class="sub">会话已登记，但<b>麦克风硬件是关的</b>。电脑上的应用把录音设备选成 CABLE Input 时，硬件才会在这一秒打开。</div>
+          <div class="rowlab"><span class="r">← 禁用</span><span class="g">启用（默认，待命/使用中）→</span></div>
+        </div>
+
+        <div class="blk">
+          <div class="statusline"><span class="status standby">待命：麦克风硬件已关闭</span>
+            <span class="sp"></span><span class="chip standby">0 kbps</span></div>
+          <div class="meter">
+            <span style="height:6%"></span><span style="height:5%"></span><span style="height:5%"></span>
+            <span style="height:4%"></span><span style="height:4%"></span><span style="height:4%"></span>
+            <span style="height:4%"></span><span style="height:4%"></span><span style="height:4%"></span>
+            <span style="height:4%"></span>
+          </div>
+          <div class="grid">
+            <div class="cell"><div class="k">上行码率</div><div class="v">0 kbps</div></div>
+            <div class="cell"><div class="k">采样率</div><div class="v">48 kHz</div></div>
+            <div class="cell"><div class="k">声道</div><div class="v">单声道</div></div>
+          </div>
+        </div>
+
+        <div class="blk">
+          <div class="t" style="font-size:13.5px;font-weight:700">参数</div>
+          <div style="font-size:12px;color:var(--ink-2);margin-top:8px">采样率</div>
+          <div class="seg2"><div class="on">48 kHz · 直通</div><div>44.1 kHz · PC 重采样</div></div>
+        </div>
+
+        <div class="why">
+          <span class="del">静音（会话保留，电平归零）</span>　<span class="del">后台守护</span> —— 按你的要求从麦克风页删除。<br>
+          要临时不出声：直接拨顶部滑块禁用（或电脑那边不选这个录音设备）。<br>
+          电平表待命时保持静止，就是"硬件真没开"的证据。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════ 摄像头页（使用中）══════════════ -->
+  <div class="col">
+    <p class="label">④ 摄像头页 · 使用中（取景框在最上方，通道块与守护已删）</p>
+    <div class="phone">
+      <div class="appbar"><span class="back">←</span><span>摄像头</span>
+        <span class="sp"></span><span class="chip live">使用中</span></div>
+      <div class="body">
+
+        <div class="view">
+          <span class="chip rec rec">REC 取景中</span>
+          <span class="tap">点按全屏</span>
+          <span class="stamp">960×720 · 24fps · 410 kbps · 后置</span>
+        </div>
+
+        <div class="gate" style="border-color:var(--primary);background:var(--primary-soft)">
+          <div class="head">
+            <span class="ic">🟢</span>
+            <span class="state" style="color:var(--primary)">已启用 · 使用中</span>
+            <span class="sw"><i></i></span>
+          </div>
+          <div class="sub">电脑应用此刻正持有虚拟摄像头，相机硬件开着。拨到「禁用」= 立即注销会话并关闭相机。</div>
+          <div class="rowlab"><span class="r">← 禁用</span><span class="g">启用（默认，待命/使用中）→</span></div>
+        </div>
+
+        <div class="blk">
+          <div class="t" style="font-size:13.5px;font-weight:700">参数</div>
+          <div style="font-size:12px;color:var(--ink-2);margin-top:8px">清晰度</div>
+          <div class="drop"><span>自动（最高档）</span><span class="sp">960×720 @ 30fps ▾</span></div>
+          <div class="btnrow">
+            <div class="btn out">切换前置</div>
+            <div class="btn out">旋转90° 0°</div>
+          </div>
+        </div>
+
+        <div class="btn red">冻结画面（会话保留，画面停住）</div>
+        <div class="why" style="margin-top:12px">
+          rev3 页面顺序：<b>取景框 → 启用/禁用状态块 → 参数 → 冻结</b>。<br>
+          <span class="del">通道：Unity Video Capture / OBS 状态块</span>、
+          <span class="del">后台守护开关</span>、
+          <span class="del">大圆形「启用/停止」按钮</span>、<span class="del">红色「启用摄像头」按钮</span> 全部删除。<br>
+          顶栏右侧的「使用中 / 待命」徽标就是唯一的占用指示，不再重复列通道。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════ 摄像头页（待命）══════════════ -->
+  <div class="col">
+    <p class="label">⑤ 摄像头页 · 待命时取景框是灰占位</p>
+    <div class="phone">
+      <div class="appbar"><span class="back">←</span><span>摄像头</span>
+        <span class="sp"></span><span class="chip standby">待命</span></div>
+      <div class="body">
+        <div class="view idle">
+          <span class="txt">硬件未开启 · 电脑应用一打开虚拟摄像头就出画面</span>
+        </div>
+        <div class="gate">
+          <div class="head">
+            <span class="ic">✅</span>
+            <span class="state">已启用 · 待命</span>
+            <span class="sw"><i></i></span>
+          </div>
+          <div class="sub">会话已登记，相机硬件关闭（无绿点、不耗电）。</div>
+          <div class="rowlab"><span class="r">← 禁用</span><span class="g">启用（默认，待命/使用中）→</span></div>
+        </div>
+        <div class="blk">
+          <div class="t" style="font-size:13.5px;font-weight:700">参数</div>
+          <div style="font-size:12px;color:var(--ink-2);margin-top:8px">清晰度</div>
+          <div class="drop"><span>自动（最高档）</span><span class="sp">960×720 @ 30fps ▾</span></div>
+          <div class="hint">待命中改档位即刻生效：重发一次登记（cam_start），电脑下次打开虚拟摄像头就是新画质。</div>
+          <div class="btnrow">
+            <div class="btn out">切换前置</div>
+            <div class="btn out">旋转90° 0°</div>
+          </div>
+          <div class="hint">镜头与旋转同理：任何时候都能预设，相机开着时点按则立即重启套用。</div>
+        </div>
+        <div class="btn grey">冻结画面（当前无画面可冻）</div>
+      </div>
+    </div>
+    <p class="note">取景框在待命时给灰斜纹占位 + 一行说明，避免"是不是坏了"的误判。<br>
+      <b>rev3.1 纠正：</b>待命页的<b>参数区不再置灰</b>——清晰度/镜头/旋转<b>任何状态下都能改</b>。
+      待命中改 = 只更新登记值（不动硬件）；使用中改 = 重启相机套用；未连接时改 = 存成偏好，进待命即生效。
+      唯一真正不可改的是<b>已禁用</b>态（功能整体关闭，见 ⑥）。</p>
+  </div>
+
+  <!-- ══════════════ 禁用态 ══════════════ -->
+  <div class="col">
+    <p class="label">⑥ 任一设备被禁用（以麦克风为例）</p>
+    <div class="phone">
+      <div class="appbar"><span class="back">←</span><span>麦克风</span>
+        <span class="sp"></span><span class="chip off">已禁用</span></div>
+      <div class="body">
+        <div class="gate dis">
+          <div class="head">
+            <span class="ic">⛔</span>
+            <span class="state">已禁用</span>
+            <span class="sw en"><i></i></span>
+          </div>
+          <div class="sub">本设备功能已关闭：会话注销、硬件不开启，<b>电脑那边再怎么调用也唤不起它</b>。</div>
+          <div class="rowlab"><span class="r">← 禁用（当前）</span><span class="g">启用 →</span></div>
+        </div>
+        <div class="blk" style="opacity:.5">
+          <div class="statusline"><span class="status">已禁用：无法使用</span></div>
+          <div class="grid">
+            <div class="cell"><div class="k">上行码率</div><div class="v">—</div></div>
+            <div class="cell"><div class="k">采样率</div><div class="v">—</div></div>
+            <div class="cell"><div class="k">声道</div><div class="v">—</div></div>
+          </div>
+        </div>
+        <div class="blk" style="opacity:.5">
+          <div class="t" style="font-size:13.5px;font-weight:700">参数（禁用时不可改）</div>
+          <div class="seg2"><div class="on" style="opacity:.6">48 kHz · 直通</div><div style="opacity:.6">44.1 kHz · PC 重采样</div></div>
+        </div>
+        <div class="btn out">拨回「启用」即恢复待命</div>
+      </div>
+    </div>
+    <p class="note">禁用块用红底+红边框+大字「已禁用」，滑块圆点停在左侧"禁用"一端（绿底圆点在右 = 启用）；参数区变灰不可交互。</p>
+  </div>
+</div>
+
+<h2>⑦ 禁用块的三种状态（这是本轮最关键的辨识度改动）</h2>
+<div class="row">
+  <div class="col" style="width:880px">
+    <div class="why" style="line-height:1.9;font-size:12.5px">
+      <b>为什么不只放一个滑块：</b>Material 的开关在"关"时是灰的，用户分不清"这个设备我没启用"还是"启用了但当前没在用"。
+      所以状态块同时给出四层信息：<b>大字状态</b>（已启用 · 待命 / 已启用 · 使用中 / 已禁用）、
+      <b>整块底色与边框</b>（启用=绿底绿边，禁用=红底红边）、<b>滑块位置 + 两端"启用/禁用"字样</b>、
+      <b>一句话后果说明</b>（禁用后电脑那边唤不起它）。首页卡片和页面顶栏的徽标与这块严格同步。<br>
+      <b>滑块方向约定</b>（和 Flutter <code>Switch</code> 的实际渲染一致，别搞反）：
+      拇指在<b>右</b> = 启用（绿底），拇指在<b>左</b> = 禁用（红底）；所以两端字样左边写"禁用"、右边写"启用（默认）"。
+    </div>
+    <div style="margin-top:14px">
+      <div class="gate" style="margin-bottom:10px">
+        <div class="head"><span class="ic">✅</span><span class="state">已启用 · 待命</span><span class="sw"><i></i></span></div>
+        <div class="sub">会话已登记，硬件关闭。→ 默认态</div>
+      </div>
+      <div class="gate" style="margin-bottom:10px;border-color:var(--primary);background:var(--primary-soft)">
+        <div class="head"><span class="ic">🟢</span><span class="state" style="color:var(--primary)">已启用 · 使用中</span><span class="sw"><i></i></span></div>
+        <div class="sub">电脑此刻正在使用该设备，硬件已开启。→ 使用中（音响/摄像头还有各自的画面、电平反馈）</div>
+      </div>
+      <div class="gate dis" style="margin-bottom:0">
+        <div class="head"><span class="ic">⛔</span><span class="state">已禁用</span><span class="sw en"><i></i></span></div>
+        <div class="sub">功能关闭，电脑无法唤醒。→ 手动禁用</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2>⑧ 落地改动清单（你点头就开工）</h2>
+<div class="row">
+  <div class="col" style="width:880px">
+    <div class="why" style="line-height:1.9;font-size:12.5px">
+      · <code>providers/connection_provider.dart</code>：ConnectionMode 增 bluetooth + 每模式状态表（Tab 颜色来源）<br>
+      · 新增 <code>providers/device_provider.dart</code>：三设备「启用/禁用（持久化）+ 待命·使用中」，
+      禁用即发 <code>mic_stop</code> / <code>cam_stop{forced}</code> / 停接音频流，且服务器记住"该客户端已主动禁用"，不再被唤醒<br>
+      · <code>screens/home_screen.dart</code>：三 Tab 连接区 + 三张设备入口卡（替换现在"卡片里塞守护开关 + 详情按钮"）<br>
+      · <code>screens/camera_screen.dart</code>：取景框提到最上方；<b>删「通道 Unity/OBS」状态块、删后台守护开关</b>、
+      删大圆启用/停止按钮与权限红按钮；顶部换成"状态明说"的禁用块；
+      保留镜头切换/旋转/清晰度/冻结/全屏<br>
+      · <b>rev3.1 参数随时可改（真实代码缺陷，不只是图）</b>：<br>
+      &nbsp;&nbsp;<code>providers/camera_provider.dart</code>：能力探测从 <code>_enterStandbyInternal()</code> 里拆出来，
+      连上就探一次并缓存（<code>_ensureCaps()</code>）——探档位不需要开相机，档位表本就该一直在；
+      <code>switchLens()</code> 增加 idle/standby 分支（只翻 <code>_facing</code> + 重挑档 + 重发 <code>cam_start</code>，不碰硬件），
+      旋转也允许未连接时预设。选档逻辑 <code>_applyProfileChange()</code> 三种状态已经都处理好了，不用动。<br>
+      &nbsp;&nbsp;<code>screens/camera_screen.dart</code>：清晰度下拉去掉 <code>state != CamState.idle</code> 这个显示条件、
+      旋转按钮去掉 idle 置灰；还没探到档位时下拉显示"探测中…"占位，而不是整行消失。<br>
+      · <code>screens/mic_screen.dart</code>：<b>删静音按钮、删后台守护开关</b>；顶部加禁用块；保留采样率与电平/码率显示<br>
+      · 新增 <code>screens/speaker_screen.dart</code>：禁用块 + 音量/缓冲档位/静音 + 延迟码率指标（音量与缓冲需动原生层）<br>
+      · <code>screens/home_screen.dart</code> 里现有的麦克风守护卡、摄像头守护卡：UI 全部撤掉。<b>注意</b>：
+      开关删除 ≠ 保活服务删除——前台服务要改成常开（不然手机进程被系统回收后，电脑那边再也唤不起设备），
+      只是不再在界面上暴露这个概念
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

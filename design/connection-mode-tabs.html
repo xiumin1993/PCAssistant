@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>首页连接模式三 Tab 视觉稿 v2</title>
+<style>
+  :root{
+    --primary:#0061a4; --primary-soft:#e5f0fa; --ink:#111826; --ink-2:#5b6472;
+    --line:#d7dbe0; --surface:#f4f6f8; --card:#ffffff; --disabled:#b6bcc4;
+    --ok:#0f8a43; --ok-soft:#e3f6ea; --bad:#c62828; --bad-soft:#fdeaea;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--surface);color:var(--ink);
+       font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;padding:28px}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--ink-2);font-size:13px;margin-bottom:22px;line-height:1.7}
+  .row{display:flex;gap:20px;flex-wrap:wrap}
+  .col{width:330px}
+  .label{font-size:13px;font-weight:600;margin:0 0 8px;color:var(--ink)}
+  .note{font-size:12px;color:var(--ink-2);margin-top:10px;line-height:1.65}
+  .phone{background:var(--card);border:1px solid var(--line);border-radius:18px;
+         padding:20px 16px 22px;box-shadow:0 2px 10px rgba(16,24,40,.06)}
+  .icon-lg{font-size:42px;text-align:center;color:var(--primary);line-height:1}
+  .icon-lg.off{color:var(--disabled)}
+  .status{text-align:center;font-size:22px;font-weight:700;margin:8px 0 2px}
+  .status.on{color:var(--ok)}
+  .status.err{color:var(--bad)}
+  .status-sub{text-align:center;font-size:13px;color:var(--ink-2);margin:0 0 16px;min-height:18px}
+  .status-sub.err{color:var(--bad)}
+  /* ── 分段控件：Tab 自己带"这个模式的状态" ── */
+  .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin:0 0 14px}
+  .seg div{flex:1;text-align:center;padding:10px 2px;font-size:13px;color:var(--ink-2);
+           background:#fff;border-right:1px solid var(--line);position:relative}
+  .seg div:last-child{border-right:0}
+  .seg div.sel{background:#f1f4f7;font-weight:700;color:var(--ink)}
+  .seg div.ok{background:var(--ok-soft);color:var(--ok);font-weight:700}
+  .seg div.bad{background:var(--bad-soft);color:var(--bad);font-weight:700}
+  .seg .ic{width:15px;height:15px;vertical-align:-3px;margin-right:3px;opacity:.85}
+  .seg .mark{font-size:11px;margin-left:3px}
+  /* 选中态：Tab 底部一条 2px 深色指示条 —— 只表示"正在看哪个模式"，不表示状态 */
+  .seg div.sel::after{content:"";position:absolute;left:8px;right:8px;bottom:3px;height:2px;
+                      border-radius:2px;background:var(--ink)}
+  .field{border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-size:13px;
+         color:var(--ink);background:#fff;display:flex;align-items:center;gap:8px}
+  .field .pre{color:var(--ink-2)}
+  .field .val{font-weight:600}
+  .field .cap{color:var(--disabled);font-size:12px}
+  .field.locked{background:#f7f8fa;color:var(--ink-2)}
+  .btn{margin-top:12px;width:100%;padding:13px;border-radius:8px;text-align:center;
+       font-size:15px;font-weight:700;background:var(--primary);color:#fff}
+  .btn.danger{background:#fff;color:var(--bad);border:1.5px solid var(--bad)}
+  .btn.disabled{background:#e9ecef;color:var(--disabled);font-weight:600}
+  .tips{font-size:12px;color:var(--ink-2);margin-top:10px;line-height:1.65;
+        background:#fbfcfd;border-left:3px solid var(--line);padding:8px 10px}
+  .tips b{color:var(--ink)}
+  .card{border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:12px;
+        display:flex;align-items:center;gap:10px;background:#fff}
+  .card .t{font-size:13px;font-weight:600}
+  .card .d{font-size:11px;color:var(--ink-2)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--disabled);margin-left:auto}
+  .dot.live{background:var(--ok)}
+  .hidden-slot{border:1px dashed var(--line);border-radius:10px;padding:12px;margin-top:12px;
+        font-size:12px;color:var(--ink-2);background:#fafbfc;text-align:center}
+  .bt-card{border:1px solid var(--line);border-radius:10px;padding:16px;margin-top:6px;
+        background:#fafbfc;text-align:center;color:var(--ink-2)}
+  .bt-card .big{font-size:28px;color:var(--disabled)}
+  .bt-card .h{font-size:14px;font-weight:700;color:var(--ink-2);margin-top:6px}
+  .bt-card .p{font-size:12px;line-height:1.7;margin-top:6px}
+  .legend{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px;
+          margin:0 0 22px;font-size:13px;line-height:1.9;max-width:1000px}
+  .chip{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:700}
+  .chip.g{background:var(--ok-soft);color:var(--ok)}
+  .chip.r{background:var(--bad-soft);color:var(--bad)}
+  .chip.n{background:#f1f4f7;color:var(--ink)}
+</style>
+</head>
+<body>
+
+<h1>首页 · 连接模式三 Tab（v2）</h1>
+<div class="sub">
+  本轮改动：① 顶部大图标换成<b>连接器</b>（Flutter 用 <code>Icons.cable</code>，两端带插头的线缆，比喇叭更贴合"连接"语义）；
+  ② 删掉"当前模式：xxx"那行文案；③ Tab 自带状态：<b>绿底+✓ = 该模式已连接</b>，<b>红底+! = 该模式上次连接失败</b>；
+  ④ Tab 只表示"在看哪个模式"（选中态用底部深色指示条，与状态色互不干扰）。
+</div>
+
+<div class="legend">
+  <b>状态机（你要的那条规则）</b><br>
+  · 切换 Tab <b>不产生任何连接动作</b>：不断开、不重连、不清状态，绿勾/红! 都留在原来那个 Tab 上。<br>
+  · 只有<b>在当前 Tab 点「连接」</b>才会：先清除上一个连接状态（断开旧通道）与失败状态，再按该模式的参数发起新连接。<br>
+  · 连接成功 → 该 Tab 变 <span class="chip g">✓ WiFi</span>；连接失败 → 该 Tab 变 <span class="chip r">! WiFi</span> 并在副标题写明失败原因；
+  任一 Tab 变成 <span class="chip g">✓</span> 期间，其它 Tab 显示为普通态。
+</div>
+
+<div class="row">
+
+  <!-- ============ ① WiFi 未连接 ============ -->
+  <div class="col">
+    <p class="label">① WiFi Tab（默认，尚未连接）</p>
+    <div class="phone">
+      <div class="icon-lg off">🔌</div>
+      <div class="status">未连接</div>
+      <div class="status-sub">填写地址后点「连接」</div>
+
+      <div class="seg">
+        <div class="sel">WiFi</div>
+        <div>USB</div>
+        <div>蓝牙</div>
+      </div>
+
+      <div class="field"><span class="pre">💻</span><span class="val">192.168.0.103:8080</span><span class="cap">上次地址</span></div>
+      <div class="btn">连接</div>
+      <div class="tips">WiFi 模式填<b>完整 IP:端口</b>，手机与电脑需在同一个路由器/网段。</div>
+
+      <div class="card"><span>🔊</span><div><div class="t">PC 音箱</div><div class="d">电脑声音 → 手机扬声器</div></div><span class="dot"></span></div>
+      <div class="card"><span>🎙️</span><div><div class="t">手机作麦克风</div><div class="d">待命（硬件关闭）</div></div><span class="dot"></span></div>
+      <div class="card"><span>📷</span><div><div class="t">手机作摄像头</div><div class="d">待命（硬件关闭）</div></div><span class="dot"></span></div>
+    </div>
+    <p class="note">Tab 无状态色 = 该模式没有连接记录（既没连上也没失败）。</p>
+  </div>
+
+  <!-- ============ ② WiFi 已连接 ============ -->
+  <div class="col">
+    <p class="label">② WiFi 连接成功（Tab 绿底 + ✓）</p>
+    <div class="phone">
+      <div class="icon-lg">🔌</div>
+      <div class="status on">已连接</div>
+      <div class="status-sub">WiFi · 192.168.0.103:8080 · 正在接收音频流</div>
+
+      <div class="seg">
+        <div class="sel ok">WiFi<span class="mark">✓</span></div>
+        <div>USB</div>
+        <div>蓝牙</div>
+      </div>
+
+      <div class="field locked"><span class="pre">💻</span><span class="val">192.168.0.103:8080</span><span class="cap">已连接时不可编辑</span></div>
+      <div class="btn danger">断开连接</div>
+
+      <div class="card"><span>🔊</span><div><div class="t">PC 音箱</div><div class="d">运行中</div></div><span class="dot live"></span></div>
+      <div class="card"><span>🎙️</span><div><div class="t">手机作麦克风</div><div class="d">待命（硬件关闭）</div></div><span class="dot"></span></div>
+      <div class="card"><span>📷</span><div><div class="t">手机作摄像头</div><div class="d">待命（硬件关闭）</div></div><span class="dot"></span></div>
+    </div>
+    <p class="note">绿勾挂在<b>发起连接的那个模式</b>上；副标题把模式和实际地址一起显示，一眼看清走的是哪条通道。</p>
+  </div>
+
+  <!-- ============ ③ 失败 ============ -->
+  <div class="col">
+    <p class="label">③ 连接失败（Tab 红底 + !）</p>
+    <div class="phone">
+      <div class="icon-lg off">🔌</div>
+      <div class="status err">连接失败</div>
+      <div class="status-sub err">WiFi · 无法连接 192.168.0.99:8080（超时/地址不通）</div>
+
+      <div class="seg">
+        <div class="sel bad">WiFi<span class="mark">!</span></div>
+        <div>USB</div>
+        <div>蓝牙</div>
+      </div>
+
+      <div class="field"><span class="pre">💻</span><span class="val">192.168.0.99:8080</span><span class="cap">可改后重试</span></div>
+      <div class="btn">重新连接</div>
+      <div class="tips">常见原因：服务器没开 / IP 填错 / 手机和电脑不在同一网段 / 防火墙拦了 8080。</div>
+
+      <div class="card"><span>🔊</span><div><div class="t">PC 音箱</div><div class="d">未连接</div></div><span class="dot"></span></div>
+      <div class="card"><span>🎙️</span><div><div class="t">手机作麦克风</div><div class="d">未连接</div></div><span class="dot"></span></div>
+      <div class="card"><span>📷</span><div><div class="t">手机作摄像头</div><div class="d">未连接</div></div><span class="dot"></span></div>
+    </div>
+    <p class="note">红色只代表<b>这个模式上次尝试失败过</b>；改地址或点重连时，失败标记先清掉再走新流程。</p>
+  </div>
+
+  <!-- ============ ④ 连着 WiFi 去看 USB Tab ============ -->
+  <div class="col">
+    <p class="label">④ 连着 WiFi，只是切到 USB Tab 看看</p>
+    <div class="phone">
+      <div class="icon-lg">🔌</div>
+      <div class="status on">已连接</div>
+      <div class="status-sub">WiFi · 192.168.0.103:8080 · 正在接收音频流</div>
+
+      <div class="seg">
+        <div class="ok">WiFi<span class="mark">✓</span></div>
+        <div class="sel">USB</div>
+        <div>蓝牙</div>
+      </div>
+
+      <div style="display:flex;gap:8px">
+        <div class="field locked" style="flex:1"><span class="pre">127.0.0.1:</span></div>
+        <div class="field" style="width:92px"><span class="val">8080</span><span class="cap">端口</span></div>
+      </div>
+      <div class="btn">连接（会先断开 WiFi）</div>
+      <div class="tips">切 Tab <b>不断线</b>，音频继续走 WiFi。按钮文案点明后果：在 USB Tab 点连接 = 先拆掉现有连接再按 USB 建新的。</div>
+
+      <div class="card"><span>🔊</span><div><div class="t">PC 音箱</div><div class="d">运行中（WiFi）</div></div><span class="dot live"></span></div>
+      <div class="card"><span>🎙️</span><div><div class="t">手机作麦克风</div><div class="d">待命（硬件关闭）</div></div><span class="dot"></span></div>
+      <div class="card"><span>📷</span><div><div class="t">手机作摄像头</div><div class="d">待命（硬件关闭）</div></div><span class="dot"></span></div>
+    </div>
+    <p class="note">这就是"简单切换 tab 不会引起状态变化"：WiFi 的绿勾还在，连接照常。</p>
+  </div>
+
+  <!-- ============ ⑤ USB Tab ============ -->
+  <div class="col">
+    <p class="label">⑤ USB Tab（只填端口，连接后同样绿勾）</p>
+    <div class="phone">
+      <div class="icon-lg off">🔌</div>
+      <div class="status">未连接</div>
+      <div class="status-sub">USB 有线：只填端口</div>
+
+      <div class="seg">
+        <div>WiFi</div>
+        <div class="sel">USB</div>
+        <div>蓝牙</div>
+      </div>
+
+      <div style="display:flex;gap:8px">
+        <div class="field locked" style="flex:1"><span class="pre">127.0.0.1:</span></div>
+        <div class="field" style="width:92px"><span class="val">8080</span><span class="cap">端口</span></div>
+      </div>
+      <div class="btn">连接</div>
+      <div class="tips">
+        前缀 <b>127.0.0.1</b> 固定不可编辑。<br>
+        前提：USB 线插好 + 电脑执行 <b>adb reverse tcp:8080 tcp:8080</b>。<br>
+        iPhone 无对应机制 → iOS 上 USB Tab 整个隐藏。
+      </div>
+
+      <div class="card"><span>🔊</span><div><div class="t">PC 音箱</div><div class="d">未连接</div></div><span class="dot"></span></div>
+      <div class="card"><span>🎙️</span><div><div class="t">手机作麦克风</div><div class="d">未连接</div></div><span class="dot"></span></div>
+      <div class="card"><span>📷</span><div><div class="t">手机作摄像头</div><div class="d">未连接</div></div><span class="dot"></span></div>
+    </div>
+    <p class="note">连接成功后：<code>✓ USB</code> 绿底，副标题「USB · 127.0.0.1:8080」。</p>
+  </div>
+
+  <!-- ============ ⑥ 蓝牙 Tab ============ -->
+  <div class="col">
+    <p class="label">⑥ 蓝牙 Tab（占位灰态，摄像头组件隐藏）</p>
+    <div class="phone">
+      <div class="icon-lg off">🔌</div>
+      <div class="status">未连接</div>
+      <div class="status-sub">蓝牙通道尚未支持</div>
+
+      <div class="seg">
+        <div>WiFi</div>
+        <div>USB</div>
+        <div class="sel">蓝牙</div>
+      </div>
+
+      <div class="bt-card">
+        <div class="big">🛠</div>
+        <div class="h">蓝牙通道即将支持</div>
+        <div class="p">
+          当前 App 与电脑之间只有 WebSocket/TCP 一条通路。<br>
+          蓝牙需走经典蓝牙 RFCOMM 串口桥接，PC 端要新增蓝牙服务端，
+          实测带宽约 1 Mbps，只适合传音频，不适合画面。
+        </div>
+      </div>
+      <div class="btn disabled">连接（暂不可用）</div>
+
+      <div class="card"><span>🔊</span><div><div class="t">PC 音箱</div><div class="d">蓝牙模式下暂不可用</div></div><span class="dot"></span></div>
+      <div class="card"><span>🎙️</span><div><div class="t">手机作麦克风</div><div class="d">蓝牙模式下暂不可用</div></div><span class="dot"></span></div>
+      <div class="hidden-slot">📷 手机作摄像头：<b>蓝牙模式下不提供</b>（整块隐藏，不是置灰）</div>
+    </div>
+    <p class="note">蓝牙 Tab 永远拿不到绿勾（连不上），也不会显示红! —— 它没有"尝试失败"，是"不支持"。</p>
+  </div>
+</div>
+
+<div class="sub" style="margin-top:22px">
+  <b>Flutter 侧图标与配色落点：</b>顶部大图标 <code>Icons.cable</code>（连接态=主色，未连接=outline 灰，失败=红）；
+  Tab 用 <code>SegmentedButton&lt;ConnectionMode&gt;</code>，其 <code>style</code> 按该模式状态三选一：
+  成功 <code>greenContainer</code> + <code>Icons.check</code> 后缀，失败 <code>redContainer</code> + <code>Icons.priority_high</code>，
+  无状态用主题默认。<code>selected</code> 只决定"在看哪个模式"，与状态色叠加时绿/红仍可见。
+</div>
+
+</body>
+</html>
