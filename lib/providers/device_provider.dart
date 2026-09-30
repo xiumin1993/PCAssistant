@@ -19,6 +19,23 @@
 //   DeviceProvider ──写──> 上面三者的 setEnabled()（把闸门执行下去）
 //   底层 Provider 【不】反向依赖本文件 —— 它们只认自己的 _enabled 布尔。
 // ============================================================================
+// ── 文件说明书（速览，初学者可先背这一段）──────────────────────────────
+// 【管什么】三台设备（音响/麦克风/摄像头）各自的"用户启没启用"布尔账本，
+//   外加把底层技术状态翻译成界面上五档统一状态词（DeviceUiStatus）。
+// 【谁调用它】首页三张入口卡与授权横幅（lib/screens/home_screen.dart 里的
+//   Consumer<DeviceProvider>）、三个设备详情页顶栏徽标和页首禁用开关。
+//   界面全部走"只读方法"（statusOf/statusLabelOf/isEnabled…），没有例外。
+// 【它调用谁】读：ConnectionProvider.isConnected、MicProvider/CameraProvider
+//   的 isLive/isStandby、AudioService.isPlaying；写：三者的 setEnabled()
+//   和 AudioService.setMuted()。注册顺序见 lib/main.dart（必须排在被读者之后）。
+// 【状态怎么流转】用户拨禁用开关 → setEnabled() 记内存+存 SharedPreferences
+//   → 转发底层执行 → 底层 notifyListeners → 本类 _onSourceChanged 跟着
+//   notifyListeners → 界面重建、重新读 statusOf() 上色。
+// 【产品原则·唯一否决权】全 App 只有设备详情页顶部那个"大字写明当前是
+//   禁用还是启用"的总闸能关掉一台设备；页面里旧的"启用/停止"按钮、
+//   麦克风页的静音键都已删除——两处开关必然有一处骗人，只留一处才可信。
+//   唯一例外是音响的"临时静音"：只关本机出声、不动会话，性质是播放参数。
+// ============================================================================
 
 import 'package:flutter/material.dart'; // ChangeNotifier / Color / IconData
 import 'package:shared_preferences/shared_preferences.dart';
@@ -40,6 +57,12 @@ enum PcDevice { speaker, mic, camera }
 ///                              手机确认后才登记会话（只有摄像头走这一档）
 ///   standby       待命     —— 会话已登记，硬件关着（不耗电、无绿点）
 ///   active        使用中   —— 电脑此刻真的在用它
+// 五档各自"对用户说的话"（对应 statusLabelOf 的文案，一处对一句）：
+//   disabled       → "我被你关了，去详情页拨回来"（红）
+//   offline        → "还没连上电脑，谈不上用不用"（灰）
+//   pendingConsent → "链路是通的，只差一次人工确认（电脑请求/录音授权）"（琥珀）
+//   standby        → "随时可用，但硬件此刻关着，不耗电不打扰你"（绿）
+//   active         → "电脑这一刻真的在用它，注意隐私"（蓝）
 enum DeviceUiStatus {
   disabled,
   offline,
@@ -58,6 +81,11 @@ class DeviceProvider extends ChangeNotifier {
 
   // 每台设备的启用状态。默认全 true —— 用户的设计是"默认都是待命状态"，
   // 禁用是要用户明确去拨的闸，不是出厂默认。
+  // 为什么 isEnabled() 的 `?? true` 和这里的初始 true 是同一语义的两道保险：
+  // "没有明确记录 = 启用"。默认若是 false，新用户装上后要翻三个页面各点一次
+  // 启用才能用，产品第一步就劝退；⚠ 注意：真要把默认改成 false，
+  // 下面 _load() 里 `?? true` 的兜底和已存盘的旧键都要一起想清楚，
+  // 否则两处默认打架，禁用/启用会表现得心口不一。
   final Map<PcDevice, bool> _enabled = {
     PcDevice.speaker: true,
     PcDevice.mic: true,
@@ -72,6 +100,11 @@ class DeviceProvider extends ChangeNotifier {
   // 界面才能"电脑开始用了 → 首页卡片自己变绿"。
   // 用的是 ChangeNotifier 自带的 addListener（不是 Stream，所以不需要
   // StreamSubscription，但 dispose 里必须成对 removeListener）。
+  // ⚠ 注意：_audio（AudioService）没有挂监听——它是普通 Provider、
+  // 不继承 ChangeNotifier，播/停变化不会叫醒本类。音响从"使用中"变回
+  // "待命"时，徽标要等其他监听源（连接/麦克风/摄像头）顺带触发刷新才会变。
+  // 若将来发现音响状态显示迟钝，先想到这里，但修它要动 main.dart 的分层，
+  // 不要在本文件里私自补救。
 
   DeviceProvider({
     required ConnectionProvider connection,
@@ -101,6 +134,9 @@ class DeviceProvider extends ChangeNotifier {
   // 被他明确禁用的麦克风又悄悄回到待命态 —— 等于他的否决被系统遗忘了。
 
   /// 本地存储的键名前缀。集中一个常量，将来改键名只改一处。
+  // 实际键名 = 前缀 + 枚举名，例如 device_enabled_speaker / device_enabled_mic。
+  // 拼 d.name 而不是手写字符串，枚举改名时键名自动跟着变；
+  // 老键读不到会走 ?? true 默认启用，不会崩，只是用户得重拨一次闸。
   static const String _prefsPrefix = 'device_enabled_';
 
   Future<void> _load() async {
@@ -125,6 +161,11 @@ class DeviceProvider extends ChangeNotifier {
   /// 拨动某台设备的总闸。
   /// 顺序：先记本地 → 再执行动作。反过来会有个窗口期：
   /// 动作触发了一连串回调，回调里读到"还没更新"的开关，界面闪一下错误状态。
+  // "为什么禁用时连上电脑也不登记会话"的保险丝不住在本类：setEnabled(false)
+  // 只是把布尔拨下去，真正的拦截在底层 —— MicProvider / CameraProvider 收到
+  // connected 事件时先查自己的 _enabled，false 就直接跳过登记（见
+  // lib/providers/mic_provider.dart 与 camera_provider.dart 里的 _enabled 注释）。
+  // 所以"闸门说了算"是全链路行为：禁用 → 不登记 → 收不到唤醒 → 硬件永不打开。
   Future<void> setEnabled(PcDevice device, bool on) async {
     if (_enabled[device] == on) return;
     _enabled[device] = on;
@@ -147,6 +188,11 @@ class DeviceProvider extends ChangeNotifier {
   }
 
   /// 音响临时静音（只影响本机播放，不影响会话与电脑侧）
+  // 再强调一遍边界：静音 ≠ 否决权。它只是"这台音箱暂时不出声"的播放参数，
+  // 会话照常保留、电脑还以为声音在放；真正的关设备只有上面的禁用总闸。
+  // 这也是"麦克风页的静音键被删、音响静音却被留下"的原因：
+  // 麦克风静音会给人"电脑收不到我声音"的错觉（其实上行仍在跑），
+  // 涉及隐私的开关必须用一个说清楚状态的禁用闸门，不能用静音键。
   Future<void> setSpeakerMuted(bool on) async {
     _speakerMuted = on;
     await _audio.setMuted(on);
@@ -159,10 +205,15 @@ class DeviceProvider extends ChangeNotifier {
   // 只读出口：界面拿这些去上色、配文案
   // --------------------------------------------------------------------------
 
+  // 只读出口：Map 取不到键会返回 null（可空类型 ? 的又一次体现），
+  // `?? true` 把"没记录"兜底成"启用"——与构造时的初始值同一默认哲学。
   bool isEnabled(PcDevice device) => _enabled[device] ?? true;
 
   /// 某台设备此刻该显示成五档中的哪一档。
   /// 判断顺序就是优先级：禁用 > 未连接 > 使用中 > 待命 > 待电脑请求。
+  // 为什么"禁用"必须排在"未连接"前面？—— 设备被禁用又恰好没连电脑时，
+  // 用户该看到的提醒是"你自己把它关了（拨回来就能用）"，而不是笼统的
+  // "未连接"把人支去查网线。顺序换过来，闸门就等于在说谎。
   DeviceUiStatus statusOf(PcDevice device) {
     if (!isEnabled(device)) return DeviceUiStatus.disabled;
     if (!_connection.isConnected) return DeviceUiStatus.offline;
@@ -288,6 +339,9 @@ class DeviceProvider extends ChangeNotifier {
   }
 
   /// 状态对应的颜色（徽标底色、卡片描边都读它，一处定义全局一致）。
+  // Color(0xFFxxxxxx) 是 32 位 ARGB 整数：前两位 FF = 不透明度（255=全实），
+  // 后六位是 RRGGBB 色值。改后六位 = 换颜色；把 FF 改成别的数 = 半透明，
+  // 徽标会透出背景变脏——新手最容易误改的就是这两位。
   Color statusColor(PcDevice device) {
     switch (statusOf(device)) {
       case DeviceUiStatus.disabled:

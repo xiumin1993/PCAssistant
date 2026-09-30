@@ -17,6 +17,24 @@
 //   订阅了这个对象的 Widget 就会自动重建刷新界面。
 //   这就是"数据变了，界面自动跟着变"的实现原理。
 // ============================================================================
+// ── 文件说明书（速览，初学者可先背这一段）──────────────────────────────
+// 【管什么】手机与 PC 之间"连接"这件事的全部状态：当前看哪个模式 Tab、
+//   每个 Tab 连没连上、输入框里的地址/端口、是否正在连接（转圈）、错误提示。
+// 【谁调用它】首页 lib/screens/home_screen.dart：用 Consumer<ConnectionProvider>
+//   订阅它刷新界面；点按钮时用 context.read<ConnectionProvider>() 拿它调方法。
+//   记住 provider 包的两个动作的区别：
+//     read  = 只拿对象做事（按一次按钮），不订阅、数据变了不重建本 Widget；
+//     watch = 订阅它，它一 notifyListeners 本 Widget 就重建。
+//   两种用法在 lib/widgets/language_sheet.dart 里同屏出现过，可读作对照。
+// 【它调用谁】NetworkService（真正建 WebSocket 连接）、AudioService（连上后
+//   开/关播放）。两者由 lib/main.dart 的 Provider/ChangeNotifierProvider 注入。
+// 【状态怎么流转】界面点按钮 → toggleConnection() → NetworkService.connect()
+//   → 状态流广播回调（_setupListeners 监听 1）→ 改私有字段 → notifyListeners()
+//   → 订阅的 Widget 重建 → 界面显示新状态。数据永远单向流动，不许倒着改。
+// 【顺带讲 late】late = "final 字段先不初始化，第一次用到才要求有值"，
+//   用来逃开"final 必须在构造完成前赋值"的限制。本类所有 final 字段都在
+//   构造函数初始化列表里赋好了，所以这里用不到 late，见别处用别慌。
+// ============================================================================
 
 // dart:async：StreamSubscription，用来保存对流(Stream)的订阅句柄
 import 'dart:async';
@@ -44,6 +62,18 @@ import '../l10n/app_localizations.dart';
 /// v3.6：枚举从 2 个值变 3 个 —— 注意 Dart 对枚举的 switch 要求"穷举"，
 /// 所以凡是 switch(_connectionMode) 的地方都会立刻报编译错，
 /// 这是保护网（防止加了新模式却忘了配文案），不是坑。
+// 三种模式各自"怎么连上 PC"的本质区别（初学者必读）：
+//   wifi       —— 走局域网：手机和 PC 必须在同一个路由器/热点下，
+//                 手动输入 PC 的局域网 IP + 端口（如 192.168.1.100:8080）。
+//                 IP 是路由器动态分的，重连路由器/换热点后可能变，变了就要重输。
+//   usb        —— 走 USB 数据线：PC 上执行 adb reverse tcp:8080 tcp:8080 后，
+//                 手机自己的 8080 端口被"镜像"到 PC 的 8080，所以手机连
+//                 127.0.0.1 就等于连上 PC。⚠ 注意：adb reverse 依赖【物理 USB 线】，
+//                 WiFi ADB（安卓无线调试）没有这条隧道，USB Tab 插无线调试连不上。
+//   bluetooth —— 纯占位：App↔PC 只有 WebSocket/TCP 一条通路，本版既没做配对
+//                 也没做蓝牙传输，点它会直接弹提示（见 toggleConnection 开头）。
+// 扫码输入 IP 本类不感知：Provider 只认输入框里的字符串，将来加扫码也是
+// 界面把解出的地址写回 serverAddressController，再调 toggleConnection()。
 enum ConnectionMode { wifi, usb, bluetooth }
 
 /// 连接状态管理
@@ -82,6 +112,10 @@ class ConnectionProvider extends ChangeNotifier {
   //   而 USB Tab 该显示"未连接"。一份全局状态做不到这件事。
   // Map 的 key 是枚举、value 是状态；没连过的模式压根不在表里，
   // 读的时候用 statusOf() 兜底成 disconnected。
+  //   再举一个例子帮你记牢：WiFi 连上后切去 USB Tab 点连接、失败了，
+  //   表里就是 {wifi: connected, usb: error} —— WiFi Tab 仍绿、USB Tab 红，
+  //   切回 WiFi 页照样显示"已连接"，物理连接全程不受影响。
+  //   若只有一个全局 _connectionStatus，"一绿一红"这种局面根本表达不出来。
   final Map<ConnectionMode, ConnectionStatus> _modeStatus = {};
 
   // 当前这条连接是"由哪个模式发起"的。
@@ -91,6 +125,10 @@ class ConnectionProvider extends ChangeNotifier {
 
   // 注意：这个字段和 NetworkService 里的枚举是同一个类型（import 过来的），
   // 两个类共享一份枚举定义，保证语义一致。
+  // 为什么有了"每模式账本"_modeStatus 还留这个全局值？
+  //   它记录的是"物理上这条 WebSocket 此刻的真实状态"（流一来就原样写入），
+  //   isConnected / isLoading 和 toggleConnection 的判断都读它；
+  //   _modeStatus 只是给三个 Tab 上色用的账本，两者角色不同、缺一不可。
   ConnectionStatus _connectionStatus = ConnectionStatus.disconnected;
 
   // v3.7 国际化：错误不再存"拼好的中文句子"，而是存【文案键】+【原始细节】。
@@ -110,6 +148,12 @@ class ConnectionProvider extends ChangeNotifier {
   final TextEditingController _serverAddressController = TextEditingController();
 
   /// USB 模式下的端口输入控制器，默认 8080。
+  // 8080 不是随便挑的魔数，它是"三处联动"的约定端口：
+  //   ① PC 端 Rust AudioServer 默认监听 8080；
+  //   ② adb reverse tcp:8080 tcp:8080 转发的也是 8080；
+  //   ③ 这里默认填 8080。
+  // 只改这里、不同步改另外两处 → 连不上（连接被拒绝 / 隧道对不上号）。
+  // WiFi Tab 输入的"端口"同理：必须是 PC 端服务器真正监听的那个口。
   final TextEditingController _usbPortController = TextEditingController(text: '8080');
 
   /// 构造函数。
@@ -133,6 +177,11 @@ class ConnectionProvider extends ChangeNotifier {
   ///
   /// SharedPreferences.getInstance() 是异步的（要读磁盘），
   /// 返回 Future，用 await 等待结果。
+  // 本文件一共往 SharedPreferences 存 3 个键（全在类内读写，没有别处动它们）：
+  //   server_address  —— 上次连接的完整地址，回填 WiFi 输入框；
+  //   connection_mode —— 上次停留的 Tab（存枚举名 'wifi'/'usb'/'bluetooth'）；
+  //   usb_port        —— 上次填的 USB 端口号。
+  // 存的意义：这些是"用户输入过的偏好"，杀 App 重开不该让人重输一遍。
   Future<void> _init() async {
     final prefs = await SharedPreferences.getInstance();
     // getString 可能返回 null（从没存过），用 ?? 提供默认值 ''
@@ -159,6 +208,15 @@ class ConnectionProvider extends ChangeNotifier {
   }
 
   /// 建立"接线"：把两个服务的输出流接到本类的处理逻辑上。
+  // StreamSubscription（流订阅句柄）再强调一遍：listen() 返回它，相当于
+  // "订报纸的收据"——将来退订（cancel）全靠它。四个句柄都存进字段、
+  // dispose() 里逐个 cancel，是本文件最重要的资源管理纪律。
+  // ⚠ 注意：本文件【没有】心跳（定时 ping）、断线自动重连/退避（Timer）、
+  // 自建超时——链路一断就停在 disconnected 等用户手动再点连接；连接卡住时
+  // 靠操作系统默认超时抛异常（可能要等几十秒，期间界面一直转圈）。
+  // 将来若要加自动重连，正确姿势是：在下面"监听 1"收到 disconnected 时
+  // 启动一个 Timer 延时重试，间隔逐次翻倍（指数退避，建议起步 2s、封顶 30s，
+  // 太短会疯狂重试费电、太长用户以为程序死了），连上或 dispose 时记得 cancel。
   void _setupListeners() {
     // 【监听 1：连接状态变化】
     _statusSubscription = _networkService.connectionStatusStream.listen((status) {
@@ -177,12 +235,19 @@ class ConnectionProvider extends ChangeNotifier {
         } else if (status == ConnectionStatus.error) {
           _modeStatus[owner] = ConnectionStatus.error;
           _connectingMode = null; // 这次尝试结束了，失败态留在 Tab 上
+        // 两种"结束"的待遇刻意不同：error 保留在 Tab 账本上（红标是给用户的
+        // 结果反馈，等他再点连接才清，见 toggleConnection）；
+        // disconnected 直接从账本划掉 —— 正常断开等于"这件事结束了"，
+        // Tab 回到"从没连过"的灰色才是最诚实的显示。
         } else if (status == ConnectionStatus.disconnected) {
           _modeStatus.remove(owner);
           _connectingMode = null;
         }
       }
 
+      // 跨服务调度就住在这几行：连上即开始播放、断开即停播，
+      // 音响模式"连上自动出声"全靠它。注意读的是全局 status（物理连接），
+      // 不是 _modeStatus 账本 —— 播不播声音取决于"链路通没通"，与哪个 Tab 无关。
       if (status == ConnectionStatus.connected) {
         _audioService.startStreaming();
       } else if (status == ConnectionStatus.disconnected) {
@@ -267,6 +332,9 @@ class ConnectionProvider extends ChangeNotifier {
   /// 【重要】这里只改"在看哪个模式"，绝不断开、也绝不发起连接 ——
   /// 用户明确要求：简单切换 Tab 不会引起状态变化。
   /// 真正的动作只有一个：点当前 Tab 里的"连接"按钮。
+  // 界面对应物：参见 lib/screens/home_screen.dart 的手动模式开关
+  // （_ModeTabs 的三个 Tab，onTap 只调这一个 setMode，绝不碰 connect/disconnect）。
+  // 存 connection_mode 到 SharedPreferences：下次冷启动还停在上次的 Tab 上。
   Future<void> setMode(ConnectionMode mode) async {
     if (_connectionMode == mode) return; // 没变就别白刷新一次
     _connectionMode = mode;
@@ -292,6 +360,10 @@ class ConnectionProvider extends ChangeNotifier {
           ? l10n.btnDisconnect
           // btnConnectWithSwitch 是带占位符的句子："连接（会先断开{mode}）"，
           // 所以生成出来的是一个【方法】而不是字段，要这样传参调用。
+          // 顺带讲 ! ：_connectingMode! 读作"我担保此刻它不是 null"——
+          // 能走到这一行说明 isConnected 为真且连的不是当前 Tab，
+          // 那这次连接必然是由某个模式发起的，字段必非空。! 是"判空豁免声明"，
+          // 担保错了运行时会当场抛异常，所以只在逻辑上必然成立的地方用。
           : l10n.btnConnectWithSwitch(modeLabel(l10n, _connectingMode!));
     }
     return l10n.btnConnect;
@@ -333,6 +405,9 @@ class ConnectionProvider extends ChangeNotifier {
         _errorDetail = null;
         return null;
       }
+      // 127.0.0.1 是回环地址（"手机自己"）。单看它永远连不到 PC，
+      // 全靠 PC 上先执行了 adb reverse，把手机的这个端口沿 USB 线引到 PC——
+      // 所以 USB Tab 只填端口不填 IP：IP 天生就是 127.0.0.1，没有可选项。
       return '127.0.0.1:$port';
     }
     final address = _serverAddressController.text.trim();
@@ -382,6 +457,9 @@ class ConnectionProvider extends ChangeNotifier {
   /// v3.6 的关键语义（用户明确要求）：
   ///   只有在【当前 Tab】里点连接，才会清除之前的"已连接/连接失败"状态，
   ///   并建立一条新连接。切 Tab 本身不触发这里。
+  // 地址从哪来：WiFi 是用户手输的局域网 IP:端口，USB 是 127.0.0.1+端口，
+  // 都由 _addressForCurrentMode() 组装；本方法先清错误、再判"该连还是该断"。
+  // ⚠ 注意：切换模式的 Tab（setMode）不会走到这里，所以"切 Tab 不断线"。
   Future<void> toggleConnection() async {
     // 每次操作前清除上次错误提示（重新来过）
     _errorKey = null;
@@ -443,6 +521,8 @@ class ConnectionProvider extends ChangeNotifier {
     _serverAddressController.dispose();
     _usbPortController.dispose();
     // 最后调用父类的 dispose —— 固定套路，永远放在最末
+    // super 指父类 ChangeNotifier：它会把自己从 provider 框架的注册表里摘掉，
+    // 并封锁之后的 notifyListeners —— 漏掉这一行，销毁后再有通知就抛异常。
     super.dispose();
   }
 }
