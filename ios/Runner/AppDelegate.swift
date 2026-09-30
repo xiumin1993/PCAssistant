@@ -336,8 +336,12 @@ final class MicUplink {
     /// 静默查询（checkMicPermission 用）：true=已授权
     static func micAuthorized() -> Bool {
         if #available(iOS 17.0, *) {
-            // iOS17：AVAudioApplication 是新的全局音频/权限入口
-            return AVAudioApplication.isMicrophoneAuthorized()
+            // iOS17：AVAudioApplication 是新的全局音频/权限入口。
+            // ★ 正确的写法是【实例属性】recordPermission（通过 .shared 拿到单例），
+            //   值为 .granted / .denied / .restricted 三档，只有 .granted 算授权。
+            //   （注意：AVAudioApplication 并没有 isMicrophoneAuthorized() 这个方法，
+            //     那是 AVAudioSession 时代的旧叫法，写错会直接编译不过。）
+            return AVAudioApplication.shared.recordPermission == .granted
         } else {
             return AVAudioSession.sharedInstance().recordPermission == .granted
         }
