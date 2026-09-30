@@ -50,6 +50,25 @@ class CameraScreen extends StatelessWidget {
                       ? Colors.blueGrey.shade400 // 待命：灰蓝 = 相机关着
                       : Colors.blue.shade600)); // 未启用：蓝 = 点我启用
 
+          // ── 清晰度下拉框的取值（v3.4.12 修正）──
+          // 为什么不用显示文字当选项值：
+          //   下拉框每个选项要一个"内部标识"(value)，选中后 Flutter 用它回填显示。
+          //   以前我们直接把 "640×480 @ 30fps" 这种给人看的文字当标识，
+          //   再用正则把数字抠回来判断选了哪档 —— 正则只删掉非数字字符，
+          //   fps 的 "30" 会粘在高度后面（变成 48030），永远匹配不到任何档位，
+          //   于是"手动选清晰度"看起来点了、实际什么都没发生。
+          //   现在改成：标识 = 档位清单里的【下标】("0"/"1"/…)。
+          //   显示文字随便改，选中即 lensSizes[i]，不需要任何反解，也不会重名。
+          final sizes = provider.lensSizes;
+          final selIdx = provider.autoProfile
+              ? -1
+              : sizes.indexWhere((s) =>
+                  s.width == provider.selWidth &&
+                  s.height == provider.selHeight);
+          // 手动档但清单里找不到（换镜头的瞬间）→ 回落到显示"自动"，
+          // 保证 value 一定在 items 里，否则 DropdownButton 会断言崩溃。
+          final qualityValue = selIdx >= 0 ? '$selIdx' : 'auto';
+
           return Center(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(24.0),
@@ -110,22 +129,20 @@ class CameraScreen extends StatelessWidget {
                             style: TextStyle(color: Colors.black54)),
                         const SizedBox(width: 8),
                         DropdownButton<String>(
-                          value: provider.autoProfile
-                              ? 'auto'
-                              : '${provider.qualityText}',
-                          // 当前档位文字（qualityText 由 provider 拼接）
+                          // 选中项标识（'auto' 或档位下标），见上方 v3.4.12 说明
+                          value: qualityValue,
                           items: [
                             // 第一项固定是"自动"，括注自动现在挑的档
                             const DropdownMenuItem(
                               value: 'auto',
                               child: Text('自动（最高档）'),
                             ),
-                            // 后面每一项来自能力探测清单
-                            for (final s in provider.lensSizes)
+                            // 后面每一项来自能力探测清单，value = 该档在清单里的下标
+                            for (int i = 0; i < sizes.length; i++)
                               DropdownMenuItem(
-                                value: '${s.width}×${s.height} @ ${s.maxFps.clamp(1, 30)}fps',
+                                value: '$i',
                                 child: Text(
-                                  '${s.width}×${s.height} @ ${s.maxFps.clamp(1, 30)}fps',
+                                  '${sizes[i].width}×${sizes[i].height} @ ${sizes[i].maxFps.clamp(1, 30)}fps',
                                   style: const TextStyle(fontSize: 14),
                                 ),
                               ),
@@ -134,18 +151,12 @@ class CameraScreen extends StatelessWidget {
                             if (v == null) return;
                             if (v == 'auto') {
                               provider.setAutoProfile();
-                            } else {
-                              // 从 "宽×高 @ Nfps" 反解出宽高，再找回档位对象
-                              final parts =
-                                  v.replaceAll(RegExp(r'[^0-9×]'), '').split('×');
-                              final w = int.tryParse(parts[0]) ?? 0;
-                              final h = int.tryParse(parts[1]) ?? 0;
-                              final match = provider.lensSizes
-                                  .where((s) => s.width == w && s.height == h)
-                                  .toList();
-                              if (match.isNotEmpty) {
-                                provider.selectProfile(match.first);
-                              }
+                              return;
+                            }
+                            // 下标 → 直接取出档位对象，不做任何字符串解析
+                            final i = int.tryParse(v) ?? -1;
+                            if (i >= 0 && i < sizes.length) {
+                              provider.selectProfile(sizes[i]);
                             }
                           },
                         ),
@@ -266,8 +277,7 @@ class CameraScreen extends StatelessWidget {
                   // ============ ⑦ 参数信息行 ============
                   Card(
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 8),
+                      padding: const EdgeInsets.symmetric( horizontal: 16, vertical: 8),
                       child: Column(
                         children: [
                           _InfoRow(
