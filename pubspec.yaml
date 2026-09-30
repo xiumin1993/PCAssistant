@@ -19,6 +19,20 @@ dependencies:
   # 本地存储 - 保存连接配置
   shared_preferences: ^2.3.3
 
+  # --------------------------------------------------------------------------
+  # 国际化（i18n）—— 两个包配套使用，都是 Flutter 官方方案
+  # --------------------------------------------------------------------------
+  # flutter_localizations：提供 Material/Cupertino 组件自带的多语言
+  # （日期选择器、"取消"按钮等系统词），并定义了 Localizations 机制。
+  # 注意它必须写成 `sdk: flutter` 这种"SDK 依赖"形式，不能写版本号 ——
+  # 它的版本永远和当前 Flutter SDK 绑死。
+  flutter_localizations:
+    sdk: flutter
+
+  # intl：gen-l10n 生成的 AppLocalizations 类内部要用它的
+  # Intl / MessageFormat 运行时；不写这一行，生成代码会报"找不到包"。
+  intl: ^0.20.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -26,3 +40,12 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  # --------------------------------------------------------------------------
+  # generate: true —— 打开 Flutter 官方的"构建期代码生成"开关
+  # --------------------------------------------------------------------------
+  # 有了它，`flutter run` / `flutter build` 每次构建都会自动读 l10n.yaml，
+  # 把 lib/l10n/*.arb 翻译成 .dart_tool/.../app_localizations.dart 供我们 import。
+  # 少了这一行，gen-l10n 会直接报错
+  # "Attempted to generate localizations code without having the flutter: generate flag"。
+  generate: true

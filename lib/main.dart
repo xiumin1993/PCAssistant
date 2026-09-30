@@ -24,6 +24,8 @@ import 'app.dart';                        // 应用的根 Widget，负责配置�
 import 'providers/connection_provider.dart'; // 管理"连接状态"的逻辑中心
 import 'providers/mic_provider.dart';     // 管理"手机麦克风模式"的逻辑中心
 import 'providers/camera_provider.dart';  // 管理"手机摄像头模式"的逻辑中心（v3.4）
+import 'providers/device_provider.dart';   // 三设备总闸与状态词（v3.6）
+import 'providers/language_provider.dart';  // 界面语言选择（v3.7 国际化）
 import 'services/audio_service.dart';     // 负责播放音频流
 import 'services/network_service.dart';   // 负责 WebSocket 网络连接
 
@@ -43,6 +45,18 @@ void main() {
   runApp(
     MultiProvider(
       providers: [
+        // --------------------------------------------------------------------
+        // 服务 0：界面语言（v3.7 国际化新增）
+        // --------------------------------------------------------------------
+        // 放在最前面只是阅读顺序上的考虑：它是"跟业务无关的全局偏好"。
+        // 构造时抓一份系统语言的快照，之后从 SharedPreferences 恢复
+        // 用户手动选过的档位（auto / en / zh）。
+        // 用 ChangeNotifierProvider：用户改语言 → notifyListeners →
+        // app.dart 里的 Consumer 重建 MaterialApp → 全 App 换语言。
+        ChangeNotifierProvider<LanguageProvider>(
+          create: (_) => LanguageProvider(),
+        ),
+
         // --------------------------------------------------------------------
         // 服务 1：网络服务 —— 管理 WebSocket 连接
         // --------------------------------------------------------------------
@@ -111,6 +125,25 @@ void main() {
         ChangeNotifierProvider<CameraProvider>(
           create: (context) => CameraProvider(
             networkService: context.read<NetworkService>(),
+          ),
+        ),
+
+        // --------------------------------------------------------------------
+        // 服务 6：三设备总闸与状态账本（v3.6 新增）
+        // --------------------------------------------------------------------
+        // 它自己不干活，只把上面三个 Provider 的"技术状态"翻译成
+        // 界面要的状态词（已禁用/未连接/待命/使用中），并把用户的
+        // 启用/禁用意图执行下去 + 存本地。
+        //
+        // 注册顺序有讲究：必须排在 ConnectionProvider / MicProvider /
+        // CameraProvider 之后，因为 create 里要用 context.read 取它们。
+        // Provider 列表是从上往下构建的，先注册的才是"祖先"，读得到。
+        ChangeNotifierProvider<DeviceProvider>(
+          create: (context) => DeviceProvider(
+            connection: context.read<ConnectionProvider>(),
+            mic: context.read<MicProvider>(),
+            camera: context.read<CameraProvider>(),
+            audio: context.read<AudioService>(),
           ),
         ),
       ],

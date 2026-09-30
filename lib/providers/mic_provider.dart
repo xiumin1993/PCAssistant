@@ -38,6 +38,9 @@ import 'package:flutter/material.dart'; // ChangeNotifier 所在
 import '../services/mic_service.dart';
 import '../services/network_service.dart';
 
+// v3.7 国际化：文案表类型（由界面把实例传进 errorOf / statusTextOf）
+import '../l10n/app_localizations.dart';
+
 /// 麦克风会话状态枚举（界面按它显示不同文字/按钮颜色）
 enum MicState {
   idle,     // 未启用（未连接，或用户手动关闭守护）
@@ -91,7 +94,17 @@ class MicProvider extends ChangeNotifier {
     }
   }
   bool _needsPermission = false; // 连接了但缺录音权限 → 首页显示"启用"按钮
-  String? _errorMessage;    // 可空：null = 当前无错误
+  // v3.7 国际化：错误存【文案键】而不是中文句子（详见 connection_provider 同款注释）。
+  String? _errorKey; // null = 当前无错误
+  String? _errorDetail; // 原始细节（如原生错误码），不参与翻译
+
+  // ── v3.6：本设备的功能总闸（"启用/禁用"块控制，值由 DeviceProvider 存本地）──
+  // false = 用户明确禁用过手机麦克风：
+  //   · 连上电脑不再自动进待命（不登记会话）；
+  //   · 就算收到 mic_state:true 也不开硬件；
+  //   · 关闭那一刻会主动注销已有会话（发 mic_stop），电脑那边随之再也唤不起。
+  // 这是用户要的"唯一手动否决权"——麦克风页不再有静音键，禁用块就是那道闸。
+  bool _enabled = true;
 
   double _level = 0; // 最新一帧响度（0.0~1.0）
   final List<double> _bars = []; // 电平滚动历史（界面画条形图用）
@@ -189,39 +202,65 @@ class MicProvider extends ChangeNotifier {
   bool get serverLive => _serverLive;   // 电脑是否有应用正在录 CABLE Output
   bool get needsPermission => _needsPermission; // 首页据此显示"启用麦克风"
   bool get hasSession => _sessionEstablished;
-  String? get errorMessage => _errorMessage;
+
+  /// 记录/清除一条错误。只存文案键（+ 可选细节），句子由界面翻译。
+  void _setError(String? key, [String? detail]) {
+    _errorKey = key;
+    _errorDetail = detail;
+  }
+
+  /// 当前错误的人话版本（v3.7 国际化）；null = 没有错误。
+  String? errorOf(AppLocalizations l10n) {
+    final key = _errorKey;
+    if (key == null) return null;
+    return switch (key) {
+      'errConnectFirst' => l10n.errConnectFirst,
+      'errMicPermission' => l10n.errMicPermission,
+      'errMicDenied' => l10n.errMicDenied,
+      'errMicBusy' => l10n.errMicBusy,
+      'errMicUnsupported' => l10n.errMicUnsupported,
+      'errMicStart' => l10n.errMicStart(_errorDetail ?? ''),
+      _ => _errorDetail ?? key,
+    };
+  }
+
   double get level => _level;
   List<double> get bars => List.unmodifiable(_bars); // 只读快照，防界面乱改
 
-  /// 状态对应的中文文案（详情页大字）
-  String get statusText {
+  /// 状态对应的人话文案（详情页大字用）。
+  ///
+  /// v3.7 国际化：原来是硬编码中文的 getter，现在改成收 AppLocalizations 的
+  /// 方法。命名上带 `Of` 后缀 = "要传文案表才能拿到句子"。
+  /// （目前界面自己拼了大字，这两个方法是留给设备页统一改造时用的，
+  ///   保留而不删除，是为了不丢掉这里已经写清楚的优先级判断。）
+  String statusTextOf(AppLocalizations l10n) {
+    // v3.6：禁用优先于一切状态 —— 功能闸关着时，别的话都不成立
+    if (!_enabled) return l10n.micStatusDisabled;
     switch (_state) {
       case MicState.idle:
         return _needsPermission
-            ? '已连接电脑，点下方按钮授权录音后即可直接使用'
-            : '连接电脑后自动进入待命，无需任何操作';
+            ? l10n.micStatusConnectedPerm
+            : l10n.micStatusConnectedAuto;
       case MicState.standby:
-        return _muted
-            ? '已静音 —— 电脑用麦克风时也不会录音'
-            : '待命中 —— 麦克风已关闭，电脑用到时自动开启';
+        return _muted ? l10n.micStatusMuted : l10n.micStatusStandbyLong;
       case MicState.starting:
-        return '电脑正在使用，正在开启麦克风...';
+        return l10n.micStatusOpening;
       case MicState.live:
-        return '录音中 —— 电脑此刻正在使用你的麦克风';
+        return l10n.micStatusLive;
     }
   }
 
   /// 首页守护开关的副标题（一眼知道手机在干嘛）
-  String get guardianSubtitle {
+  String guardianSubtitleOf(AppLocalizations l10n) {
     switch (_state) {
       case MicState.idle:
-        return _needsPermission ? '等待授权录音' : '未启用';
+        return _needsPermission ? l10n.micBadgeWaitingPerm : l10n.micBadgeOff;
       case MicState.standby:
-        return _muted ? '已静音 · 等待解除' : '待命中 · 麦克风硬件已关闭';
+        return _muted ? l10n.micBadgeMuted : l10n.micBadgeStandby;
       case MicState.starting:
-        return '正在开启…';
+        return l10n.micBadgeStarting;
       case MicState.live:
-        return '录音中 · 电脑此刻正在使用';
+        return l10n.micBadgeLive;
     }
   }
 
@@ -235,6 +274,7 @@ class MicProvider extends ChangeNotifier {
   Future<void> _autoStandby() async {
     if (_state != MicState.idle) return; // 已在待命/工作中，幂等
     if (!_networkService.isConnected) return;
+    if (!_enabled) return; // v3.6：设备被禁用 → 连上也不登记、不待命
 
     if (!await _micService.hasPermission()) {
       _needsPermission = true;
@@ -250,13 +290,13 @@ class MicProvider extends ChangeNotifier {
   Future<void> enterStandby() async {
     if (_state != MicState.idle) return;
     if (!_networkService.isConnected) {
-      _errorMessage = '请先在首页连接电脑';
+      _setError('errConnectFirst');
       notifyListeners();
       return;
     }
 
     _state = MicState.starting; // 借"启动中"闪一下，表示正在登记
-    _errorMessage = null;
+    _setError(null);
     _needsPermission = false;
     notifyListeners();
 
@@ -284,6 +324,7 @@ class MicProvider extends ChangeNotifier {
   /// 打开麦克风硬件并开始上行（只在电脑正在用 & 未静音时被调用）
   Future<void> _openMic() async {
     if (_state == MicState.live || _state == MicState.starting) return;
+    if (!_enabled) return; // v3.6：双保险 —— 禁用状态下绝不开硬件
     _state = MicState.starting;
     notifyListeners();
 
@@ -291,7 +332,7 @@ class MicProvider extends ChangeNotifier {
     if (!await _micService.ensurePermission()) {
       _state = MicState.standby;
       _needsPermission = true;
-      _errorMessage = '需要录音权限才能当电脑麦克风';
+      _setError('errMicPermission');
       notifyListeners();
       return;
     }
@@ -301,13 +342,13 @@ class MicProvider extends ChangeNotifier {
         sampleRate: _sampleRate, channels: 1);
     if (error != null) {
       _state = MicState.standby; // 开麦失败退回待命，等下一次唤醒再试
-      _errorMessage = _errorText(error);
+      _reportNativeError(error);
       notifyListeners();
       return;
     }
 
     _state = MicState.live;
-    _errorMessage = null;
+    _setError(null);
     notifyListeners();
   }
 
@@ -349,6 +390,24 @@ class MicProvider extends ChangeNotifier {
     }
   }
 
+  /// v3.6：功能总闸（音响/麦克风/摄像头三台设备共用同一套语义）。
+  /// 关掉 = 立刻注销会话（电脑那边再也唤不起）；
+  /// 打开 = 若已连着电脑，马上回到待命（硬件仍是关的，不录音）。
+  /// 持久化不在这儿做 —— DeviceProvider 统一存本地存储，
+  /// 它才是"三台设备开关"的唯一账本，这里只负责执行。
+  Future<void> setEnabled(bool on) async {
+    if (_enabled == on) return;
+    _enabled = on;
+    if (!on) {
+      await stop(); // 注销 + 关硬件 + 撤守护通知
+    } else if (_networkService.isConnected) {
+      await _autoStandby();
+    }
+    notifyListeners();
+  }
+
+  bool get enabled => _enabled;
+
   /// 首页主按钮 / 详情页大按钮统一入口：启用待命 or 彻底关闭
   Future<void> toggle() async {
     if (_state != MicState.idle) {
@@ -356,13 +415,13 @@ class MicProvider extends ChangeNotifier {
     } else {
       // 手动启用（含权限申请）：先拿权限，再进待命
       if (!_networkService.isConnected) {
-        _errorMessage = '请先在首页连接电脑';
+        _setError('errConnectFirst');
         notifyListeners();
         return;
       }
       if (!await _micService.ensurePermission()) {
         _needsPermission = true;
-        _errorMessage = '需要录音权限才能当电脑麦克风';
+        _setError('errMicPermission');
         notifyListeners();
         return;
       }
@@ -387,17 +446,21 @@ class MicProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 原生错误码 → 中文提示（界面显示用）
-  String _errorText(String code) {
+  /// 原生错误码 → 记录对应错误。
+  ///
+  /// v3.7 国际化：以前这里直接返回拼好的中文句子（"麦克风启动失败: $code"），
+  /// 现在只登记【文案键】，原始错误码留在 _errorDetail 里给界面填进占位符。
+  /// 这样同一段原生逻辑在中/英界面下都能给出正确的人话。
+  void _reportNativeError(String code) {
     switch (code) {
       case 'PERMISSION_DENIED':
-        return '录音权限被拒绝，请在系统设置中允许';
+        _setError('errMicDenied');
       case 'INIT_FAILED':
-        return '麦克风被其他应用占用，关闭后重试';
+        _setError('errMicBusy');
       case 'BAD_BUFFER':
-        return '不支持的采样率/声道组合';
+        _setError('errMicUnsupported');
       default:
-        return '麦克风启动失败: $code';
+        _setError('errMicStart', code);
     }
   }
 

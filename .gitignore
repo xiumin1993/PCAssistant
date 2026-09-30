@@ -58,6 +58,7 @@ app.*.map.json
 # Android 构建产物
 # --------------------------------
 android/.gradle/
+android/.kotlin/
 android/**/build/
 android/captures/
 android/gradlew
@@ -126,6 +127,11 @@ logs/
 .cache/
 __pycache__/
 node_modules/
+
+# --------------------------------
+# 本地验证截图（真机截屏含人脸，不入库）
+# --------------------------------
+design/shots/
 
 # --------------------------------
 # 敏感信息（可选）

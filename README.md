@@ -106,3 +106,39 @@ design/                          UI 设计稿（HTML）
 ```
 
 协议：文本 JSON 控制帧 + 二进制媒体帧；麦克风 PCM 无标记直传，摄像头 JPEG 带 4 字节魔术头 `[0x03,'C','A','M']`。
+
+## 7. 界面语言（国际化，v3.7）
+
+方案：**Flutter 官方 gen-l10n + ARB**（不引第三方包，跟 Flutter 版本一起升级）。
+默认**跟随系统**：手机系统语言是中文进简体，其余一律英文。
+
+- 文案表：`lib/l10n/app_en.arb` + `lib/l10n/app_zh.arb`（两份键必须一一对应）
+- 配置：`l10n.yaml`；`pubspec.yaml` 里 `flutter: generate: true` + `flutter_localizations`
+- 生成物：`lib/l10n/app_localizations*.dart`（由 `flutter gen-l10n` 生成，改完 arb 必须重跑）
+- 入口：首页右上角  图标 → 语言弹层（跟随系统 / English / 简体中文），选择记在本地，
+  实时生效，不用重启
+
+**改动代码时要守的三条规则**（这是本版踩坑后定下的分工）：
+
+1. 逻辑层（provider / service）**不存句子，只存"错误键 + 原始细节"**。
+   例：`NetErrorEvent(kind, detail)`、`_errorKey/_errorDetail`。
+2. 需要翻译成文案的方法一律以 `Of(l10n)` 结尾 —— `statusLabelOf(l10n)`、`errorOf(l10n)`、
+   `gateHeadlineOf(l10n, device)`。看到 `Of` 就知道"这一步要拿文案表"。
+3. 界面文件里不写硬编码中英文，全部走 `AppLocalizations.of(context)`；
+   `const` 组件因为要插变量得去掉 `const`（这是转换时最常见的编译错误）。
+
+原生层（Flutter 的 l10n 管不到的三处系统文案）：
+
+| 位置 | 文件 | 说明 |
+|------|------|------|
+| 安卓通知栏（麦克风/摄像头待命）+ 桌面应用名 | `android/app/src/main/res/values/strings.xml`（英文默认）、`values-zh/strings.xml`（中文） | App 内切语言时通过 `com.pcspeaker/audio` 通道的 `setLocale` 同步给 `AppLocale.kt`，写进 SharedPreferences，服务下次起前台通知即用新语言。已知限制：**通知渠道名**在渠道创建那刻被系统记住，换语言只改标题正文，渠道名要重装 App 才更新（安卓硬规则，删了的渠道名不能再建） |
+| iOS 权限弹窗文案 | `ios/Runner/Info.plist` 的两条 `...UsageDescription` | 本版是**双语一行**写法。正式做法是拆成 `en.lproj / zh-Hans.lproj` 的 `InfoPlist.strings`，那需要在 Xcode 工程里建 variant group（改 `project.pbxproj`）；本仓库无 Mac/Xcode 无法验证，留待 Mac 侧再拆 |
+
+**不翻译的东西**（全球通用，两种语言写法完全一致）：WiFi / USB / IP / WebSocket /
+PCM / Hz / kHz / kbps / fps / ms / kB / MB、数字与分辨率（`1280×720 @ 30fps`）、
+品牌名 "PC Assistant / AudioServer / AudioServer"、以及语言名本身
+（"简体中文"永远写作"简体中文"、"English"永远写作 "English" —— 全球软件通行惯例，
+用户只有用自己的母语才认得出自己的语言）。
+
+加第三种语言：复制 `app_en.arb` 为 `app_ja.arb` 逐条翻译，把 `supportedLocales` 加一档，
+`LanguageProvider._resolveFromSystem()` 补一个分支，原生侧加 `values-ja/strings.xml`。

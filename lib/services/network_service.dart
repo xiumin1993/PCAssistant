@@ -52,6 +52,27 @@ enum ConnectionStatus {
   error,        // 出错（连接失败或被中断）
 }
 
+/// 一条网络错误事件（v3.7 国际化引入）。
+///
+/// 为什么不用 String：以前这里流的是"连接失败: xxx"这种拼好的中文句子，
+/// 界面直接显示 —— 一旦要支持多语言，网络层就必须知道当前语言，
+/// 分层就烂了。现在网络层只上报【事实】：
+///   kind   —— 哪一类错误（发起连接就失败 / 连上之后通道出错），界面据此选文案键
+///   detail —— 原始异常文字（英文、带 errno，排查用，不参与翻译）
+/// 界面拿到 kind+detail 才翻成人话。
+class NetErrorEvent {
+  final NetErrorKind kind;
+  final String detail;
+
+  const NetErrorEvent(this.kind, this.detail);
+}
+
+/// 错误类别。用 enum 而不是字符串，理由同 ConnectionStatus。
+enum NetErrorKind {
+  connectFailed, // 连不上（地址错、服务器没开、超时、拒绝连接）
+  streamError, // 连上之后通道出错/中断
+}
+
 /// 音频配置信息（服务器连接后发送的 JSON 头部解析结果）。
 ///
 /// 服务器在发送音频数据之前，会先发一条 JSON 文本消息，
@@ -107,7 +128,8 @@ class NetworkService {
       StreamController<ConnectionStatus>.broadcast(); // 状态变化广播
   final _audioDataController = StreamController<Uint8List>.broadcast(); // 音频字节广播
   final _audioConfigController = StreamController<AudioConfig>.broadcast(); // 音频配置广播
-  final _errorController = StreamController<String>.broadcast(); // 错误消息广播
+  final _errorController =
+      StreamController<NetErrorEvent>.broadcast(); // 错误事件广播（v3.7 起带类型）
   // v3：服务器对 mic_start 的回执（"mic_ack"）广播。
   // MicProvider 订阅它，收到才把界面切成"上行中"。
   final _micAckController = StreamController<String>.broadcast();
@@ -144,8 +166,13 @@ class NetworkService {
   /// ConnectionProvider 订阅它，收到后调 AudioService.updateConfig() 同步配置。
   Stream<AudioConfig> get audioConfigStream => _audioConfigController.stream;
 
-  /// 错误信息流：发生错误时，人类可读的错误描述从这里流出
-  Stream<String> get errorStream => _errorController.stream;
+  /// 错误信息流：发生错误时，一条 NetErrorEvent 从这里流出。
+  ///
+  /// v3.7 国际化：这里【不再】拼中文句子（以前是 '连接失败: $e'）。
+  /// 因为网络层不知道界面当前是什么语言，也不该知道 ——
+  /// 它只负责把"哪一类错误 + 原始异常文字"如实报上去，
+  /// 由 Provider 存成错误码，最后由界面用 AppLocalizations 翻成人话。
+  Stream<NetErrorEvent> get errorStream => _errorController.stream;
 
   /// v3：mic_ack 回执流（服务器确认已开启手机麦克风上行）
   Stream<String> get micAckStream => _micAckController.stream;
@@ -271,7 +298,8 @@ class NetworkService {
           }
         },
         onError: (error) {
-          _errorController.add('连接错误: $error');
+          // 只上报"类别 + 原始异常"，句子交给界面翻译（v3.7 国际化）
+          _errorController.add(NetErrorEvent(NetErrorKind.streamError, '$error'));
           _updateStatus(ConnectionStatus.error);
         },
         onDone: () {
@@ -281,7 +309,7 @@ class NetworkService {
       );
     } catch (e) {
       // 兜底：地址格式错误、服务器不存在、超时、拒绝连接等
-      _errorController.add('连接失败: $e');
+      _errorController.add(NetErrorEvent(NetErrorKind.connectFailed, '$e'));
       _updateStatus(ConnectionStatus.error);
     }
   }

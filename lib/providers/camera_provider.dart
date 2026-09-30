@@ -39,6 +39,9 @@ import 'package:flutter/material.dart'; // ChangeNotifier 所在
 import '../services/camera_service.dart';
 import '../services/network_service.dart';
 
+// v3.7 国际化：文案表类型（由界面把实例传进 errorOf / statusTextOf 等）
+import '../l10n/app_localizations.dart';
+
 /// 摄像头会话状态枚举（界面按它显示不同文字/颜色/按钮可用性）
 enum CamState {
   idle,     // 未启用（没登记会话，守护开关关着）
@@ -64,7 +67,14 @@ class CameraProvider extends ChangeNotifier {
   bool _needsPermission = false; // 想启用但缺相机权限
   bool _guardWanted = false;  // 用户意图：想要摄像头守护（断线重连后自动恢复登记）
   bool _requestPending = false; // 收到 cam_request，等用户点"同意/忽略"
-  String? _errorMessage;
+  // v3.7 国际化：错误存【文案键】+ 原始细节，不再存中文句子
+  String? _errorKey;
+  String? _errorDetail;
+
+  // ── v3.6：本设备的功能总闸（页顶"启用/禁用"块控制，值由 DeviceProvider 存本地）──
+  // false = 用户禁用了手机摄像头：不登记会话、收到 cam_state/cam_request 也不开硬件，
+  // 关闭那一刻会主动注销（发 cam_stop）。它就是用户要的"唯一手动否决权"。
+  bool _enabled = true;
 
   // ── 镜头与画质 ──
   String _facing = 'back'; // 设计决定：默认后置镜头
@@ -113,9 +123,13 @@ class CameraProvider extends ChangeNotifier {
       if (s == ConnectionStatus.connected) {
         // 与麦克风不同：摄像头连上【不】自动登记（双入口设计）。
         // 但若用户之前开着守护（_guardWanted），重连后自动恢复登记。
-        if (_guardWanted && _state == CamState.idle) {
+        if (_guardWanted && _state == CamState.idle && _enabled) {
           _enterStandbyInternal();
         }
+        // v3.4.13：连上就把"这台手机能跑什么画质"探出来缓存。
+        // 探测走 CameraCharacteristics，【不需要打开相机硬件】，
+        // 所以待命之前、甚至禁用状态下都能探 —— 画质下拉框因此随时可用。
+        ensureCaps();
       } else if (s == ConnectionStatus.disconnected) {
         // 断线：硬件与本地状态全部清零，但保留 _guardWanted 意图，
         // 下次连上自动恢复待命（体验连续，不用重新点开关）。
@@ -163,9 +177,10 @@ class CameraProvider extends ChangeNotifier {
     // 【接线 5：PC 请求启用 → 亮出确认横幅，等用户点"同意"】
     _requestSubscription = _networkService.camRequestStream.listen((_) {
       if (!_networkService.isConnected) return;
+      if (!_enabled) return; // v3.6：设备已禁用 → 连横幅都不弹，闸门说了算
       if (_state != CamState.idle) return; // 已在守护中，无需再确认
       _requestPending = true;
-      _errorMessage = null;
+      _setError(null);
       notifyListeners();
     });
 
@@ -176,7 +191,7 @@ class CameraProvider extends ChangeNotifier {
       _guardWanted = false;
       _requestPending = false;
       stop(silent: true);
-      _errorMessage = '电脑端已强制关闭摄像头';
+      _setError('camForceStopped');
       notifyListeners();
     });
   }
@@ -194,22 +209,46 @@ class CameraProvider extends ChangeNotifier {
   bool get hasSession => _sessionEstablished;
   bool get requestPending => _requestPending;
   bool get guardWanted => _guardWanted;
-  String? get errorMessage => _errorMessage;
+  /// 记录/清除一条错误。只存文案键（+ 可选细节），句子由界面翻译。
+  void _setError(String? key, [String? detail]) {
+    _errorKey = key;
+    _errorDetail = detail;
+  }
+
+  /// 当前错误的人话版本（v3.7 国际化）；null = 没有错误。
+  String? errorOf(AppLocalizations l10n) {
+    final key = _errorKey;
+    if (key == null) return null;
+    return switch (key) {
+      'errConnectFirst' => l10n.errConnectFirst,
+      'errCamPermission' => l10n.errCamPermission,
+      'camForceStopped' => l10n.camForceStopped,
+      'errCamDenied' => l10n.errCamDenied,
+      'errCamNoLens' => l10n.errCamNoLens,
+      'errCamTimeout' => l10n.errCamTimeout,
+      'errCamBusy' => l10n.errCamBusy,
+      'errCamStart' => l10n.errCamStart(_errorDetail ?? ''),
+      _ => _errorDetail ?? key,
+    };
+  }
+
   String get facing => _facing;
   Uint8List? get previewJpeg => _previewJpeg;
   int get selWidth => _selWidth;
   int get selHeight => _selHeight;
   int get selFps => _selFps;
 
-  /// 当前镜头的中文文案（切换按钮用）
-  String get facingText => _facing == 'back' ? '后置' : '前置';
+  /// 当前镜头的文案（切换按钮、预览角标用）
+  String facingTextOf(AppLocalizations l10n) =>
+      _facing == 'back' ? l10n.facingBack : l10n.facingFront;
 
   /// 切换按钮的文案（v2 设计稿：不给前置/后置两个按钮，
   /// 只给一个"切换"按钮，文字指向另一颗镜头）
-  String get switchButtonText =>
-      _facing == 'back' ? '切换前置' : '切换后置';
+  String switchButtonTextOf(AppLocalizations l10n) =>
+      _facing == 'back' ? l10n.switchToFront : l10n.switchToBack;
 
   /// 选定画质文案，如 "1280×720 @ 30fps"
+  /// —— 纯数字与单位，全球通用，不进文案表。
   String get qualityText => '$_selWidth×$_selHeight @ ${_selFps}fps';
 
   /// v3.4.1：当前手动旋转角度（0/90/180/270）
@@ -222,42 +261,59 @@ class CameraProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 状态对应的中文文案（详情页大字）
-  String get statusText {
+  /// 状态对应的人话文案（详情页大字）
+  String statusTextOf(AppLocalizations l10n) {
+    // v3.6：禁用优先于一切状态
+    if (!_enabled) return l10n.camStatusDisabled;
     switch (_state) {
       case CamState.idle:
-        if (_needsPermission) {
-          return '已连接电脑，点下方按钮授权相机后即可使用';
-        }
-        return '打开守护开关，或在电脑上请求后确认，即可当电脑摄像头';
+        if (_needsPermission) return l10n.camStatusConnectedPerm;
+        return l10n.camStatusStandbyAuto;
       case CamState.standby:
-        return _muted
-            ? '已冻结 —— 电脑观看时也不会开相机'
-            : '待命中 —— 相机已关闭，电脑打开观看时自动取景';
+        return _muted ? l10n.camStatusFrozen : l10n.camStatusStandbyLong;
       case CamState.starting:
-        return '电脑正在观看，正在开启相机...';
+        return l10n.camStatusOpening;
       case CamState.live:
-        return '取景中 —— 电脑此刻正在使用你的摄像头';
+        return l10n.camStatusLive;
     }
   }
 
   /// 首页守护开关的副标题
-  String get guardianSubtitle {
+  String guardianSubtitleOf(AppLocalizations l10n) {
     switch (_state) {
       case CamState.idle:
-        return _needsPermission ? '等待授权相机' : '未启用';
+        return _needsPermission ? l10n.camBadgeWaitingPerm : l10n.camBadgeOff;
       case CamState.standby:
-        return _muted ? '已冻结 · 等待解除' : '待命中 · 相机硬件已关闭';
+        return _muted ? l10n.camBadgeFrozen : l10n.camBadgeStandby;
       case CamState.starting:
-        return '正在开启…';
+        return l10n.camBadgeOpening;
       case CamState.live:
-        return '取景中 · 电脑此刻正在观看';
+        return l10n.camBadgeLive;
     }
   }
 
   // --------------------------------------------------------------------------
   // 启用路径（两个入口汇到同一个 _enterStandbyInternal）
   // --------------------------------------------------------------------------
+
+  /// v3.6：功能总闸（与 MicProvider.setEnabled 同一套语义）。
+  /// 关掉 = 注销会话 + 关相机 + 撤守护（电脑那边再也唤不起）；
+  /// 打开 = 若已连着电脑，直接回到待命（硬件仍关着，不取景）。
+  /// 值的持久化统一由 DeviceProvider 负责，这里只执行动作。
+  Future<void> setEnabled(bool on) async {
+    if (_enabled == on) return;
+    _enabled = on;
+    if (!on) {
+      _guardWanted = false; // 禁用是更强的意图，重连后也不要自动恢复
+      await stop();
+    } else if (_networkService.isConnected) {
+      _guardWanted = true; // 重新启用 = 用户要这个功能了
+      await _enterStandbyInternal();
+    }
+    notifyListeners();
+  }
+
+  bool get enabled => _enabled;
 
   /// 首页守护开关 / 详情页大按钮统一入口：启用 or 彻底关闭
   Future<void> toggle() async {
@@ -267,13 +323,13 @@ class CameraProvider extends ChangeNotifier {
       return;
     }
     if (!_networkService.isConnected) {
-      _errorMessage = '请先在首页连接电脑';
+      _setError('errConnectFirst');
       notifyListeners();
       return;
     }
     if (!await _cameraService.ensurePermission()) {
       _needsPermission = true;
-      _errorMessage = '需要相机权限才能当电脑摄像头';
+      _setError('errCamPermission');
       notifyListeners();
       return;
     }
@@ -286,13 +342,13 @@ class CameraProvider extends ChangeNotifier {
   Future<void> acceptRequest() async {
     _requestPending = false;
     if (!_networkService.isConnected) {
-      _errorMessage = '请先在首页连接电脑';
+      _setError('errConnectFirst');
       notifyListeners();
       return;
     }
     if (!await _cameraService.ensurePermission()) {
       _needsPermission = true;
-      _errorMessage = '需要相机权限才能当电脑摄像头';
+      _setError('errCamPermission');
       notifyListeners();
       return;
     }
@@ -307,24 +363,46 @@ class CameraProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// v3.4.13：能力探测（幂等 + 缓存）。
+  ///
+  /// 为什么单独拎出来：探测每颗镜头"支持哪些分辨率、最高多少帧"用的是
+  /// CameraCharacteristics，这是一份静态说明书，【不需要也不打开相机硬件】。
+  /// 之前它被塞进"进待命"的流程里，导致一个不合理的使用体验：
+  /// 手机还只是待命，用户就想把清晰度调低一点省流量，结果下拉框压根不出现。
+  /// 现在一连上就探一次，界面随时能拿到档位表。
+  ///
+  /// _capsReady 用来区分"还没探完"和"探完了但没有档位"，
+  /// 界面据此显示"探测中…"而不是干脆藏掉整行。
+  bool _capsReady = false;
+  bool get capsReady => _capsReady;
+
+  Future<void> ensureCaps() async {
+    if (_capsReady) return; // 探过了，直接用缓存
+    _capsReady = true; // 先置位：并发调用只探一次
+    try {
+      _caps = await _cameraService.getCapabilities();
+      _pickBestProfile(); // 按当前镜头挑最高档
+      notifyListeners(); // 档位表到了 → 下拉框该刷新
+    } catch (_) {
+      _capsReady = false; // 探失败留个机会下次再探（不致命：有保守默认档）
+    }
+  }
+
   /// 进入待命：能力探测 → 挂守护通知 → 向服务器报能力 + 登记会话。
   /// 注意这里【不】打开相机硬件 —— 那是 cam_state 信号的事。
   Future<void> _enterStandbyInternal() async {
     if (_state != CamState.idle) return; // 幂等
     if (!_networkService.isConnected) return;
+    if (!_enabled) return; // v3.6：设备被禁用 → 任何唤醒路径都进不了待命
 
     _state = CamState.starting; // 借"启动中"闪一下，表示正在登记
-    _errorMessage = null;
+    _setError(null);
     _needsPermission = false;
     notifyListeners();
 
-    // 第一步：能力探测（不开相机，纯查询"这台手机最高能跑什么画质"）
-    try {
-      _caps = await _cameraService.getCapabilities();
-      _pickBestProfile(); // 按当前镜头挑最高档
-    } catch (_) {
-      // 探测失败不致命：用保守默认 640×480@30 继续
-    }
+    // 第一步：确保能力清单已探出（连上时通常已经探过，这里幂等兜底）。
+    // 探测失败不致命：用保守默认 640×480@30 继续。
+    await ensureCaps();
 
     // 第二步：守护前台服务（息屏不被杀，PC 唤醒指令才能送达）
     await _cameraService.startGuardService();
@@ -430,7 +508,7 @@ class CameraProvider extends ChangeNotifier {
         fps: _selFps,
       );
       if (error != null) {
-        _errorMessage = _errorText(error);
+        _reportNativeError(error);
         _state = CamState.standby; // 起不来就退回待命，不算致命
       }
     } else if (_state != CamState.idle) {
@@ -445,9 +523,10 @@ class CameraProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 打开相机硬件并开始上行（只在 PC 正在观看 & 未冻结时被调用）
+  /// 打开相机硬件并开始上行（只在 PC 正在观看 & 未冻结 & 未被禁用时被调用）
   Future<void> _openCamera() async {
     if (_state == CamState.live || _state == CamState.starting) return;
+    if (!_enabled) return; // v3.6：双保险 —— 禁用状态下绝不开硬件
     _state = CamState.starting;
     notifyListeners();
 
@@ -459,12 +538,12 @@ class CameraProvider extends ChangeNotifier {
     );
     if (error != null) {
       _state = CamState.standby; // 开相机失败退回待命，等下一次唤醒
-      _errorMessage = _errorText(error);
+      _reportNativeError(error);
       notifyListeners();
       return;
     }
     _state = CamState.live;
-    _errorMessage = null;
+    _setError(null);
     notifyListeners();
   }
 
@@ -476,10 +555,22 @@ class CameraProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 切换前/后置镜头（v2 设计稿：单按钮，相机开着时才能按）。
-  /// 原生内部 stop→start 沿用当前画质档；切完更新按钮文案。
+  /// 切换前/后置镜头。
+  ///
+  /// v3.4.13 起【任何状态都能切】（用户："任何时候都可以修改摄像头清晰度"，
+  /// 镜头是同一回事）：
+  ///   · 取景中(live)：真的让原生 stop→start 换镜头，并套用新镜头的档位；
+  ///   · 待命/未登记：只把"默认镜头"这个偏好翻过来 + 重挑档位 + 重发登记，
+  ///     完全不碰相机硬件（硬件本来就是关着的，没东西可切）。
   Future<void> switchLens() async {
-    if (_state != CamState.live) return; // 未取景时按钮是灰的，这里双保险
+    if (_state != CamState.live) {
+      // 非取景态：只改意图，等下一次开相机自然生效
+      _facing = _facing == 'back' ? 'front' : 'back';
+      await ensureCaps(); // 档位表可能还没探到（未连接时也能预设）
+      _pickBestProfile(); // 前后置能力不同，重挑该镜头的最佳档
+      await _applyProfileChange(); // 待命→重发 cam_start；idle→只记账
+      return;
+    }
     final newFacing = await _cameraService.switchLens();
     if (newFacing != _facing) {
       _facing = newFacing;
@@ -493,7 +584,7 @@ class CameraProvider extends ChangeNotifier {
         fps: _selFps,
       );
       if (error != null) {
-        _errorMessage = _errorText(error);
+        _reportNativeError(error);
         _state = CamState.standby;
       }
       notifyListeners();
@@ -546,19 +637,19 @@ class CameraProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 原生错误码 → 中文提示（界面显示用）
-  String _errorText(String code) {
+  /// 原生错误码 → 记录对应错误（v3.7：只存文案键，句子交给界面翻译）
+  void _reportNativeError(String code) {
     switch (code) {
       case 'PERMISSION_DENIED':
-        return '相机权限被拒绝，请在系统设置中允许';
+        _setError('errCamDenied');
       case 'NO_CAMERA':
-        return '手机没有对应镜头';
+        _setError('errCamNoLens');
       case 'OPEN_TIMEOUT':
-        return '相机打开超时，请关闭其他相机应用重试';
+        _setError('errCamTimeout');
       case 'SESSION_FAILED':
-        return '相机被其他应用占用，关闭后重试';
+        _setError('errCamBusy');
       default:
-        return '相机启动失败: $code';
+        _setError('errCamStart', code);
     }
   }
 

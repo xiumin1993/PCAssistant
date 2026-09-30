@@ -7,7 +7,14 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Pc Speaker</string>
+	<string>PC Assistant</string>
+	<!-- v3.7 国际化：声明本 App 支持的界面语言。
+	     没有这一项，iOS 的"设置 → App → 语言"里不会列出中文/英文可选。 -->
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>zh-Hans</string>
+	</array>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -24,10 +31,15 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<!-- v3.7 国际化：系统权限弹窗的文案。
+	     iOS 的正式做法是把它挪进 <语言>.lproj/InfoPlist.strings（需要在 Xcode
+	     工程里建 variant group），那要改 project.pbxproj —— 本机没有 Mac/Xcode，
+	     改了无法验证，所以本版先用【双语一行】的稳妥方案：两种语言的人都读得懂，
+	     等 Mac 侧确认后再拆成 InfoPlist.strings。 -->
 	<key>NSMicrophoneUsageDescription</key>
-	<string>本应用把手机变成电脑的麦克风：仅在电脑端需要录音时采集声音，不会在后台悄悄录音。</string>
+	<string>Turns this phone into your PC microphone: records only while the PC needs it, never silently in the background. 用于把手机变成电脑麦克风：仅在电脑需要录音时采集，不会在后台悄悄录音。</string>
 	<key>NSCameraUsageDescription</key>
-	<string>本应用把手机变成电脑的摄像头：仅在电脑端打开观看时采集画面，关闭后立即停止并熄灭指示灯。</string>
+	<string>Turns this phone into your PC webcam: streams only while a PC app is watching, stops and darkens the indicator the moment it stops. 用于把手机变成电脑摄像头：仅在电脑打开观看时采集，关闭后立即停止并熄灭指示灯。</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

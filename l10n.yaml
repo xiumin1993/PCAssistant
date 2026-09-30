@@ -1,0 +1,29 @@
+# ============================================================================
+# l10n.yaml —— Flutter 官方国际化（gen-l10n）的配置文件
+# ----------------------------------------------------------------------------
+# 只要项目根目录有这个文件，执行 `flutter gen-l10n`（或干脆 `flutter run`，
+# Flutter 构建时会自动跑它）就会读取 lib/l10n/*.arb，
+# 生成一个 Dart 类 AppLocalizations 给我们用。
+#
+# 为什么用官方 gen-l10n 而不是第三方包（easy_localization / flutter_i18n 等）？
+#   1. 它是 Flutter SDK 自带方案，不引额外依赖 → APK 体积不涨（本项目在意体积）；
+#   2. 生成的类是【编译期检查】的：写错 key 直接编译报错，
+#      而字符串查表方案要等到运行时才看到 "translation not found"；
+#   3. ARB 是行业标准格式，将来加日语/德语只要再放一个 .arb 文件。
+# ============================================================================
+
+# 文案文件所在目录（每个语言一个文件：app_en.arb / app_zh.arb）
+arb-dir: lib/l10n
+
+# 模板文件 = 兜底语言。某个 key 在别的语言里漏了，就回退到这里的英文
+template-arb-file: app_en.arb
+
+# 生成的 Dart 文件名（放在 .dart_tool/flutter_gen 里，由框架自动 import）
+output-localization-file: app_localizations.dart
+
+# 生成的类名 —— 全项目就用 AppLocalizations.of(context).xxx 取文案
+output-class: AppLocalizations
+
+# 关掉 null：既然 app_en.arb 是模板，取不到 key 就是编码错误，
+# 让它编译期/运行期直接暴露，而不是界面悄悄显示空白。
+nullable-getter: false

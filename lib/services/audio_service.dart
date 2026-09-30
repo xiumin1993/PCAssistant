@@ -27,6 +27,17 @@ class AudioService {
   bool _isPlaying = false;
   bool _isInitialized = false;
 
+  /// 累计写入扬声器的字节数（v3.6：音响详情页显示"已接收"）
+  int _bytesReceived = 0;
+
+  // ── v3.6：音响的两把"手动闸"（都由 DeviceProvider 负责持久化）──────
+  // _enabled：音响功能的总开关。false = 用户在本机禁用了这个设备，
+  //   此时 startStreaming() 直接不干活、来数据也不写扬声器。
+  //   注意它和"静音"是两回事：禁用是功能级关闭，静音只是暂时不出声。
+  // _muted：临时静音（会话保留）。true = 数据照常到达，但不落到扬声器。
+  bool _enabled = true;
+  bool _muted = false;
+
   /// 初始化任务的 Future
   late final Future<void> _initFuture;
 
@@ -47,6 +58,8 @@ class AudioService {
 
   /// 开始接收音频流（ConnectionProvider 在连接成功后调用）
   Future<void> startStreaming() async {
+    // v3.6：音响被禁用时，连上了也不出声 —— 这是"禁用即不可用"的落点。
+    if (!_enabled) return;
     if (!_isInitialized) {
       await _initFuture;
       if (!_isInitialized) return;
@@ -63,11 +76,51 @@ class AudioService {
   ///
   /// 低延迟关键：收到数据立即写入原生 AudioTrack，不做任何缓冲
   void receiveAudioData(Uint8List data) {
+    // 两道闸：禁用（功能关了）或静音（临时不出声）都不往扬声器写。
+    if (!_enabled || _muted) return;
     if (!_isPlaying) return;
 
     // 直接写入原生层，几乎零延迟
     _channel.invokeMethod('write', {'data': data});
+    // 累计字节数：详情页"已接收"计数用。int 在 Dart 里是 64 位，
+    // 按 1.5 Mbps 跑一整天也溢出不了，不需要特殊处理。
+    _bytesReceived += data.length;
   }
+
+  /// v3.6：音响功能总开关（由首页/音响页的"启用/禁用"块驱动，值存本地）。
+  /// 关闭 = 立刻停播放；重新打开 = 若已连着电脑则马上恢复接收。
+  Future<void> setEnabled(bool on) async {
+    if (_enabled == on) return;
+    _enabled = on;
+    if (!on) {
+      await stopStreaming();
+    } else {
+      await startStreaming();
+    }
+  }
+
+  /// v3.6：临时静音（会话保留，数据照常到达，只是不落扬声器）
+  Future<void> setMuted(bool on) async {
+    _muted = on;
+  }
+
+  bool get isEnabled => _enabled;
+  bool get isMuted => _muted;
+
+  // ── v3.6：音响详情页要显示的真实参数（只读出口）──
+  // 之前这几个数只有服务内部知道，页面只能写死"48kHz 立体声"这种假文案；
+  // 现在把它们暴露出来，显示的一定是服务器实际下发的配置。
+  int get sampleRate => _sampleRate;
+  int get channelCount => _channelCount;
+
+  /// 当前链路的理论码率（bps）。
+  /// 算法：采样率 × 声道数 × 每样本字节数(16bit=2) × 8 bit，
+  /// 例：48000×2×2×8 = 1.536 Mbps。这是"链路满速"，不是实时统计，
+  /// 用来让用户对"占多少带宽"有个数量级概念，界面需标注"约"。
+  double get nominalBitrateMbps => _sampleRate * _channelCount * 2 * 8 / 1e6;
+
+  /// 累计写入扬声器的字节数（详情页显示"已接收"用）
+  int get bytesReceived => _bytesReceived;
 
   /// 停止音频流（断开连接时调用）
   Future<void> stopStreaming() async {

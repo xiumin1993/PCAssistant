@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  values/strings.xml : 安卓原生层的【默认语言 = 英文】文案表
+
+  为什么安卓也要单独做一份文案？Flutter 的 l10n 只管得到"App 界面里的字"，
+  管不到三处由系统显示给用户的东西：
+    1) 桌面图标下面的应用名（launcher label）
+    2) 麦克风/摄像头前台服务的常驻通知（标题 + 正文 + 通知渠道名）
+    3) 以后新增的原生权限说明
+  这些东西由安卓自己去 res/values-<语言>/strings.xml 里挑，
+  挑哪一份由"应用的有效语言"决定（见 AppLocale.kt）。
+
+  注意：XML 注释里不能出现连续的两个减号（那是 XML 的硬规则，
+  AAPT 编译会直接报错），所以本文件的注释分隔线用中文"　"或空行。
+
+  命名规则与 Flutter 侧对齐：notif_设备_用途，两端改文案时好对照。
+-->
+<resources>
+    <!-- 品牌名全球统一，不翻译（values-zh 里也是 PC Assistant） -->
+    <string name="app_name">PC Assistant</string>
+
+    <!-- 麦克风前台服务：通知渠道名 + 通知标题 + 正文 -->
+    <string name="notif_mic_channel">Mic standby</string>
+    <string name="notif_mic_title">PC microphone on standby</string>
+    <string name="notif_mic_text">The phone mic turns on automatically when the PC needs to record</string>
+
+    <!-- 摄像头前台服务 -->
+    <string name="notif_cam_channel">Camera standby</string>
+    <string name="notif_cam_title">PC camera on standby</string>
+    <string name="notif_cam_text">The phone camera turns on automatically when a PC app starts watching</string>
+</resources>

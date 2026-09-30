@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  values-zh/strings.xml : 安卓原生层的【简体中文】文案表
+
+  键必须和 values/strings.xml 一一对应：安卓按"同名键"在两套里挑，
+  少一个键就会退回默认（英文）；多出来的键编译不报错，但永远用不上。
+  选哪一份由 AppLocale.kt 里的"应用有效语言"决定，
+  所以 App 内把语言切成 English 时，通知栏也会跟着变英文。
+
+  （XML 注释里不能出现连续两个减号，AAPT 会报错，故分隔用空行。）
+-->
+<resources>
+    <!-- 品牌名不翻译 -->
+    <string name="app_name">PC Assistant</string>
+
+    <string name="notif_mic_channel">麦克风待命</string>
+    <string name="notif_mic_title">PC 麦克风待命中</string>
+    <string name="notif_mic_text">电脑需要录音时会自动启用手机麦克风</string>
+
+    <string name="notif_cam_channel">摄像头待命</string>
+    <string name="notif_cam_title">PC 摄像头待命中</string>
+    <string name="notif_cam_text">电脑应用观看时会自动开启手机相机</string>
+</resources>

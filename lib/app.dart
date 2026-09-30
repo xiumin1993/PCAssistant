@@ -13,6 +13,19 @@
 // Flutter Material Design UI 库（Widget、Theme、Colors 等都在这里）
 import 'package:flutter/material.dart';
 
+// provider：根 Widget 要"订阅"语言选择，语言一换整棵树重建
+import 'package:provider/provider.dart';
+
+// 官方国际化机制的入口：GlobalMaterialLocalizations 提供 Material 组件
+// （日期、"取消"、进度条朗读文案等）自带的那批多语言词条。
+import 'package:flutter_localizations/flutter_localizations.dart';
+
+// 由 lib/l10n/*.arb 在构建期自动生成的文案类（flutter: generate: true）。
+// 手写代码里永远不要改这三个 app_localizations*.dart —— 它们每次构建都会被覆盖。
+import 'l10n/app_localizations.dart';
+
+import 'providers/language_provider.dart';
+
 // 导入首页。根 Widget 本身不画具体内容，只把首页"挂"上去
 import 'screens/home_screen.dart';
 
@@ -41,47 +54,76 @@ class PCSpeakerApp extends StatelessWidget {
   /// 通过它能拿到主题、路由、Provider 等一切上层提供的信息。
   @override
   Widget build(BuildContext context) {
-    // MaterialApp：Material 风格 App 的根容器。
-    // 它负责页面路由跳转、文字缩放、弹窗等一系列全局行为。
-    // 一个 App 通常只有一个 MaterialApp。
-    return MaterialApp(
-      // 任务管理器/系统设置里显示的应用名（仅调试和系统层面可见）
-      title: 'PC Speaker',
+    // Consumer<LanguageProvider>：用户在设置页拨了语言档位 →
+    // LanguageProvider.notifyListeners() → 这里重新 build →
+    // MaterialApp 拿到新 locale → Flutter 把 Localizations 换一套，
+    // 全 App 文案当场改语言（不需要重启）。
+    return Consumer<LanguageProvider>(
+      builder: (context, lang, _) {
+        return MaterialApp(
+          // 任务管理器/系统设置里显示的应用名（仅调试和系统层面可见）。
+          // 产品名 PC Assistant 属于品牌，全球统一不翻译。
+          title: 'PC Assistant',
 
-      // 关掉右上角的 "DEBUG" 橙色横幅。开发期它用来提醒你在调试模式，
-      // 但影响截图和观感，所以关闭
-      debugShowCheckedModeBanner: false,
+          // 关掉右上角的 "DEBUG" 橙色横幅。开发期它用来提醒你在调试模式，
+          // 但影响截图和观感，所以关闭
+          debugShowCheckedModeBanner: false,
 
-      // ---------------- 亮色（白天）主题 ----------------
-      // ThemeData：一整套视觉配置（颜色、字体、圆角、阴影……）
-      // ColorScheme.fromSeed：只需给一个"种子色"（这里是蓝色），
-      // Material 3 会自动推导出整套协调的配色方案（主色、辅色、背景色等），
-      // 不用手动逐个定义颜色，这是 Material 3 的核心特性。
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.blue,
-          brightness: Brightness.light, // 强制亮色方案
-        ),
-        useMaterial3: true, // 启用 Material Design 3（新版设计规范）
-      ),
+          // ---------------- 国际化三件套（缺一不可） ----------------
+          // ① locale：强制使用哪种语言。
+          //    null = "不干预"，Flutter 自己去系统里挑（= 跟随系统档）。
+          //    非 null = 用户手动指定了 English / 简体中文。
+          locale: lang.locale,
 
-      // ---------------- 暗色（夜间）主题 ----------------
-      // 结构完全相同，只是 brightness 换成 dark。
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.blue,
-          brightness: Brightness.dark, // 强制暗色方案
-        ),
-        useMaterial3: true,
-      ),
+          // ② localizationsDelegates：告诉 Flutter "文案去哪儿找"。
+          //    · AppLocalizations.delegate → 我们自己 arb 生成的那套（首页、设备卡…）
+          //    · GlobalMaterialLocalizations → Material 组件内置的那套（系统词）
+          //    · GlobalWidgetsLocalizations / GlobalCupertinoLocalizations →
+          //      基础 Widget 和 iOS 风格组件的内置词，补齐才不会在某些控件上崩。
+          localizationsDelegates: const [
+            AppLocalizations.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
 
-      // 主题模式：system 表示跟随手机系统的深色/浅色设置自动切换。
-      // 也可以写死 light / dark。
-      themeMode: ThemeMode.system,
+          // ③ supportedLocales：本 App 声明支持的语言清单。
+          //    系统语言不在这个表里时，Flutter 会回退到清单的第一项（英文），
+          //    所以"永远不要把没文案的语言写进来"。
+          supportedLocales: AppLocalizations.supportedLocales,
 
-      // home：App 启动后显示的第一个页面。
-      // 页面内部自己会再套一个 Scaffold（脚手架），见 home_screen.dart
-      home: const HomeScreen(),
+          // ---------------- 亮色（白天）主题 ----------------
+          // ThemeData：一整套视觉配置（颜色、字体、圆角、阴影……）
+          // ColorScheme.fromSeed：只需给一个"种子色"（这里是蓝色），
+          // Material 3 会自动推导出整套协调的配色方案（主色、辅色、背景色等），
+          // 不用手动逐个定义颜色，这是 Material 3 的核心特性。
+          theme: ThemeData(
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: Colors.blue,
+              brightness: Brightness.light, // 强制亮色方案
+            ),
+            useMaterial3: true, // 启用 Material Design 3（新版设计规范）
+          ),
+
+          // ---------------- 暗色（夜间）主题 ----------------
+          // 结构完全相同，只是 brightness 换成 dark。
+          darkTheme: ThemeData(
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: Colors.blue,
+              brightness: Brightness.dark, // 强制暗色方案
+            ),
+            useMaterial3: true,
+          ),
+
+          // 主题模式：system 表示跟随手机系统的深色/浅色设置自动切换。
+          // 也可以写死 light / dark。
+          themeMode: ThemeMode.system,
+
+          // home：App 启动后显示的第一个页面。
+          // 页面内部自己会再套一个 Scaffold（脚手架），见 home_screen.dart
+          home: const HomeScreen(),
+        );
+      },
     );
   }
 }

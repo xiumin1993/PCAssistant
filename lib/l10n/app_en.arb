@@ -1,0 +1,288 @@
+{
+  "@@locale": "en",
+
+  "appTitle": "PC Assistant",
+
+  "heroConnected": "Connected",
+  "heroConnecting": "Connecting",
+  "heroConnectFailed": "Connection failed",
+  "heroNotConnected": "Not connected",
+
+  "tabWifi": "WiFi",
+  "tabUsb": "USB",
+  "tabBluetooth": "Bluetooth",
+
+  "serverAddressLabel": "PC server address",
+  "serverAddressHint": "e.g. 192.168.1.100:8080",
+  "wifiSameNetworkHint": "Phone and PC must be on the same WiFi network; the address is shown in the AudioServer window on the PC.",
+  "portLabel": "Port",
+  "usbHint": "Plug in the USB cable, then run this on the PC: adb reverse tcp:8080 tcp:8080",
+  "usbIphoneHint": "iPhone has no USB direct channel yet — use WiFi: enter the PC's LAN IP address.",
+  "bluetoothHint": "Bluetooth is not open in this version: classic Bluetooth gives about 1 Mbps, enough for audio but not for video. Everything currently runs over WiFi LAN or a USB cable.",
+
+  "btnConnect": "Connect",
+  "btnDisconnect": "Disconnect",
+  "btnConnectWithSwitch": "Connect (disconnects {mode} first)",
+  "@btnConnectWithSwitch": {
+    "placeholders": {
+      "mode": {
+        "type": "String"
+      }
+    }
+  },
+  "btnConnecting": "Connecting...",
+
+  "statusTapToStart": "Tap Connect to begin",
+  "statusConnecting": "Connecting...",
+  "statusReceiving": "Receiving audio stream",
+  "statusConnectFailed": "Connection failed — make sure AudioServer is running on the PC and that the address and port are correct",
+  "errEnterAddress": "Please enter the PC server address",
+  "errEnterPort": "Please enter the port number",
+
+  "consentTitle": "The PC wants to use your camera",
+  "consentIgnore": "Ignore",
+  "consentAgree": "Allow",
+
+  "devSpeaker": "Speaker",
+  "devMic": "Microphone",
+  "devCamera": "Camera",
+
+  "statusDisabled": "Disabled",
+  "statusOffline": "Not connected",
+  "statusPendingCam": "Awaiting PC request",
+  "statusPendingMic": "Awaiting permission",
+  "statusStandby": "Standby",
+  "statusPlayingNow": "Playing",
+  "statusRecordingNow": "Recording",
+  "statusFilmingNow": "Streaming",
+
+  "gateDisabled": "Disabled",
+  "gateEnabledOffline": "Enabled · Not connected",
+  "gateEnabledPendingCam": "Enabled · Waiting for the PC request",
+  "gateEnabledPendingMic": "Enabled · Waiting for recording permission",
+  "gateEnabledStandby": "Enabled · Standby",
+  "gateEnabledActive": "Enabled · In use",
+
+  "gateSubDisabled": "This device is switched off: the session is unregistered and no hardware starts, so nothing the PC does can wake it.",
+  "gateSubOffline": "Enabled, but not connected to the PC yet. It goes to standby automatically once connected.",
+  "gateSubPendingCam": "The camera hardware is OFF. When the PC presses \"Request Phone Camera\" your phone shows a confirmation banner; only after you allow it does the session register and go to standby — this privacy gate is deliberate.",
+  "gateSubPendingMic": "The phone has no recording permission, so the microphone never reached standby. Open the Microphone page and tap \"Grant\"; allow the system dialog once and it stays usable.",
+
+  "standbySpeaker": "Session ready, the PC is not pushing audio yet. Switching to \"Disabled\" stops receiving the stream at once.",
+  "standbyMic": "Session registered, mic hardware OFF (no green dot, no battery drain). Switching to \"Disabled\" unregisters at once.",
+  "standbyCamera": "Session registered, camera hardware OFF (no green dot, no battery drain). Switching to \"Disabled\" unregisters the session and closes the camera.",
+
+  "activeSpeaker": "The PC is pushing audio to the phone right now. Switching to \"Disabled\" stops playback and drops that channel.",
+  "activeMic": "A PC app is recording from the phone mic right now, hardware ON. Switching to \"Disabled\" unregisters and closes the mic at once.",
+  "activeCamera": "A PC app holds the virtual camera right now, camera hardware ON. Switching to \"Disabled\" unregisters the session and closes the camera.",
+
+  "detailDisabled": "Disabled · the PC cannot use it",
+  "detailOffline": "Goes to standby automatically once the PC is connected",
+  "detailPendingCam": "Connected · the camera starts after the PC asks and you confirm",
+  "detailPendingMic": "Connected · waiting for recording permission on the phone",
+  "detailStandby": "On standby · hardware off, no battery drain",
+  "detailActiveSpeaker": "Playing the audio the PC sends",
+  "detailActiveMic": "The PC is using your microphone right now",
+  "detailActiveCamera": "The PC is using your camera right now",
+
+  "gateOff": "← Disabled",
+  "gateOffCurrent": "← Disabled (now)",
+  "gateOn": "Enabled →",
+  "gateOnCurrent": "Enabled (now) →",
+
+  "grantPermission": "Grant",
+  "paramsTitle": "Parameters",
+
+  "micNoPermission": "The phone has no recording permission yet; grant it so it can act as the PC microphone",
+  "micStateRecording": "Recording: mic hardware ON",
+  "micStateStandby": "Standby: mic hardware OFF",
+  "micStateStarting": "Starting…",
+  "micStateOff": "Not enabled",
+  "micUplinkBitrate": "Uplink bitrate",
+  "micUplinkFormat": "{khz} kHz · Mono",
+  "@micUplinkFormat": {
+    "placeholders": {
+      "khz": {
+        "type": "int"
+      }
+    }
+  },
+  "micUplinkSampleRate": "Uplink sample rate",
+  "micRate48": "48 kHz · pass-through",
+  "micRate44": "44.1 kHz · resampled on PC",
+  "micParamHint": "Changing the profile while on standby takes effect at once: the app re-sends the registration (mic_start) so the server learns the new rate. While recording, capture restarts silently with a gap of about 100 ms you barely notice.",
+  "micHowToUse": "In the meeting / voice-input app on the PC, set the input device to\n\"CABLE Output (VB-Audio Virtual Cable)\"\n(once connected the phone is on standby; the mic turns ON only when a PC app uses it,\nand OFF the instant that app lets go)",
+
+  "micStatusDisabled": "Disabled — the PC cannot use the phone microphone",
+  "micStatusConnectedPerm": "Connected to the PC. Tap the button below to grant recording, then it just works.",
+  "micStatusConnectedAuto": "Goes to standby automatically once connected to the PC — nothing to do",
+  "micStatusMuted": "Muted — the mic stays off even when a PC app uses it",
+  "micStatusStandbyLong": "On standby — mic closed, opens automatically when a PC app needs it",
+  "micStatusOpening": "The PC is using it, opening the microphone...",
+  "micStatusLive": "Recording — the PC is using your microphone right now",
+  "micBadgeWaitingPerm": "Waiting for recording permission",
+  "micBadgeOff": "Not enabled",
+  "micBadgeMuted": "Muted · waiting to unmute",
+  "micBadgeStandby": "On standby · mic hardware off",
+  "micBadgeStarting": "Opening…",
+  "micBadgeLive": "Recording · the PC is using it",
+
+  "camNoPermission": "The phone has no camera permission; grant it so the PC can use the camera",
+  "camQuality": "Quality",
+  "camNoModes": "No usable mode for the current lens",
+  "camProbing": "Probing… (reads the modes this phone supports once the PC connects)",
+  "camAutoHighest": "Auto (highest)",
+  "camRotate": "Rotate {deg}°",
+  "@camRotate": {
+    "placeholders": {
+      "deg": {
+        "type": "int"
+      }
+    }
+  },
+  "camParamHint": "Parameters can be changed in any state: while filming the camera restarts silently to apply them; on standby or disconnected the choice is remembered and applied when the camera opens. Only switching to \"Disabled\" locks them — otherwise the control would be lying to you.",
+  "camFrozenLabel": "Frozen · tap to resume the picture",
+  "camFreezeLabel": "Freeze frame (session kept, picture stops)",
+  "camHowToUse": "In the meeting / camera / streaming app on the PC, pick the webcam\n\"Unity Video Capture\"\n(after enabling, the phone waits; the camera opens only while the PC watches,\nand turns OFF the instant it stops)",
+  "camIosNote": "iPhone note: because of iOS limits the camera can only stream while this page is open and the screen is awake (going to the background or locking stops it). Microphone and speaker are not affected.",
+  "camRecOverlay": "REC · the PC is using your camera",
+  "camPreviewOff": "Camera off · standby",
+  "camTapFullscreen": "Tap for fullscreen",
+  "camExitFullscreen": "Exit fullscreen",
+  "camStamp": "{quality} · {facing}",
+  "@camStamp": {
+    "placeholders": {
+      "quality": {
+        "type": "String"
+      },
+      "facing": {
+        "type": "String"
+      }
+    }
+  },
+  "camRecStamp": "REC · {quality} · {facing}",
+  "@camRecStamp": {
+    "placeholders": {
+      "quality": {
+        "type": "String"
+      },
+      "facing": {
+        "type": "String"
+      }
+    }
+  },
+
+  "camStatusDisabled": "Disabled — the PC cannot use the phone camera",
+  "camStatusConnectedPerm": "Connected to the PC; grant the camera and it is ready to use",
+  "camStatusStandbyAuto": "Standby after connecting; the PC can also request and the phone confirms",
+  "camStatusFrozen": "Frozen — the camera stays off even while the PC watches",
+  "camStatusStandbyLong": "On standby — camera closed, opens automatically when the PC watches",
+  "camStatusOpening": "The PC is watching, opening the camera...",
+  "camStatusLive": "Filming — the PC is using your camera right now",
+  "camBadgeWaitingPerm": "Waiting for camera permission",
+  "camBadgeOff": "Not enabled",
+  "camBadgeFrozen": "Frozen · waiting to resume",
+  "camBadgeStandby": "On standby · camera hardware off",
+  "camBadgeOpening": "Opening…",
+  "camBadgeLive": "Filming · the PC is watching",
+  "camForceStopped": "The PC forced the camera off",
+
+  "facingBack": "Rear",
+  "facingFront": "Front",
+  "switchToFront": "Switch to front",
+  "switchToBack": "Switch to rear",
+
+  "errConnectFirst": "Connect to the PC on the Home page first",
+  "errMicPermission": "Recording permission is needed to act as the PC microphone",
+  "errCamPermission": "Camera permission is needed to act as the PC webcam",
+  "errMicDenied": "Recording permission denied — allow it in System Settings",
+  "errMicBusy": "The microphone is held by another app — close it and retry",
+  "errMicUnsupported": "Unsupported sample-rate / channel combination",
+  "errMicStart": "Microphone failed to start: {code}",
+  "@errMicStart": {
+    "placeholders": {
+      "code": {
+        "type": "String"
+      }
+    }
+  },
+  "errCamDenied": "Camera permission denied — allow it in System Settings",
+  "errCamNoLens": "This phone has no such lens",
+  "errCamTimeout": "Opening the camera timed out — close other camera apps and retry",
+  "errCamBusy": "The camera is held by another app — close it and retry",
+  "errCamStart": "Camera failed to start: {code}",
+  "@errCamStart": {
+    "placeholders": {
+      "code": {
+        "type": "String"
+      }
+    }
+  },
+  "netError": "Connection error: {error}",
+  "@netError": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "netFailed": "Connection failed: {error}",
+  "@netFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+
+  "spkMuteTitle": "Mute on this phone",
+  "spkMuteSubtitle": "Keeps the connection and the PC-side state; the phone just stays quiet",
+  "spkSourceLabel": "Source",
+  "spkSourceValue": "PC system audio (WASAPI loopback capture)",
+  "spkFormatLabel": "Audio format",
+  "audioMono": "Mono",
+  "audioStereo": "Stereo",
+  "spkFormatValue": "{khz} kHz · {ch} · 16-bit",
+  "@spkFormatValue": {
+    "placeholders": {
+      "khz": {
+        "type": "String"
+      },
+      "ch": {
+        "type": "String"
+      }
+    }
+  },
+  "spkBitrateLabel": "Link rate",
+  "spkBitrateValue": "about {mbps} Mbps",
+  "@spkBitrateValue": {
+    "placeholders": {
+      "mbps": {
+        "type": "String"
+      }
+    }
+  },
+  "spkReceivedLabel": "Received",
+  "spkPlayStatusLabel": "Playback",
+  "spkPlayDisconnected": "Not connected",
+  "spkPlayMuted": "Receiving (muted on this phone)",
+  "spkPlayPlaying": "Playing",
+  "spkPlayWaiting": "Connected · waiting for the PC to stream",
+  "spkParamsLocked": "Phone volume and the buffer profile (low latency ↔ stability) need changes in the native player (AudioTrack volume and bufferDuration) and are not open in this build: use the phone's side keys for volume, and the buffer stays fixed by the server's lowest-latency policy.",
+  "spkHowToUse": "Nothing to choose on the PC: AudioServer grabs the system audio directly,\nso the phone becomes the PC's second speaker once connected.\nTo stop the phone making any sound at all, switch the slider above to \"Disabled\".",
+
+  "settingsTitle": "Settings",
+  "languageTitle": "Language",
+  "langAuto": "Follow system",
+  "langEn": "English",
+  "langZh": "简体中文",
+  "langAutoCurrent": "System language detected: {locale}",
+  "@langAutoCurrent": {
+    "placeholders": {
+      "locale": {
+        "type": "String"
+      }
+    }
+  },
+  "langHint": "Globally common words (WiFi, USB, IP, WebSocket, kHz) are not translated. Your choice is remembered on this phone."
+}

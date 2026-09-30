@@ -64,10 +64,20 @@ class MicForegroundService : Service() {
     private fun startAsForeground() {
         val channelId = "mic_standby"
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        // v3.7 国际化：文案不写死中文，统一从资源表取（values/ = 英文，
+        // values-zh/ = 中文），再由 localized() 按 App 内选的语言挑一份。
+        // 已知限制：通知【渠道】名在渠道创建那刻就被系统记住了，之后换语言
+        // 只会改通知的标题和正文，设置页里那条渠道名要等重装 App 才更新 ——
+        // 这是安卓的硬规则（渠道删了不能再建同名），不是我们的疏忽。
+        val ctx = localized()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             // IMPORTANCE_LOW：通知栏常驻但无声无震动，不打扰
             nm.createNotificationChannel(
-                NotificationChannel(channelId, "麦克风待命", NotificationManager.IMPORTANCE_LOW)
+                NotificationChannel(
+                    channelId,
+                    ctx.getString(R.string.notif_mic_channel),
+                    NotificationManager.IMPORTANCE_LOW
+                )
             )
         }
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -76,8 +86,8 @@ class MicForegroundService : Service() {
             @Suppress("DEPRECATION") Notification.Builder(this)
         }
         val notification = builder
-            .setContentTitle("PC 麦克风待命中")
-            .setContentText("电脑需要录音时会自动启用手机麦克风")
+            .setContentTitle(ctx.getString(R.string.notif_mic_title))
+            .setContentText(ctx.getString(R.string.notif_mic_text))
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .build()
         startForeground(1002, notification)
@@ -107,9 +117,15 @@ class CamForegroundService : Service() {
     private fun startAsForeground() {
         val channelId = "cam_standby"
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        // 同 MicForegroundService：文案进资源表，语言跟着 App 内设置走
+        val ctx = localized()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             nm.createNotificationChannel(
-                NotificationChannel(channelId, "摄像头待命", NotificationManager.IMPORTANCE_LOW)
+                NotificationChannel(
+                    channelId,
+                    ctx.getString(R.string.notif_cam_channel),
+                    NotificationManager.IMPORTANCE_LOW
+                )
             )
         }
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -118,8 +134,8 @@ class CamForegroundService : Service() {
             @Suppress("DEPRECATION") Notification.Builder(this)
         }
         val notification = builder
-            .setContentTitle("PC 摄像头待命中")
-            .setContentText("电脑应用观看时会自动开启手机相机")
+            .setContentTitle(ctx.getString(R.string.notif_cam_title))
+            .setContentText(ctx.getString(R.string.notif_cam_text))
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .build()
         startForeground(1003, notification)
@@ -342,6 +358,13 @@ class MainActivity : FlutterActivity() {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                     startActivity(home)
+                    result.success(true)
+                }
+
+                // v3.7 国际化：Flutter 切换界面语言时同步过来，让通知栏文案
+                // 与 App 内语言一致（code = "auto" / "en" / "zh"）。
+                "setLocale" -> {
+                    AppLocale.save(this, call.argument<String>("code"))
                     result.success(true)
                 }
 

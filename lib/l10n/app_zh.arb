@@ -1,0 +1,288 @@
+{
+  "@@locale": "zh",
+
+  "appTitle": "PC Assistant",
+
+  "heroConnected": "已连接",
+  "heroConnecting": "连接中",
+  "heroConnectFailed": "连接失败",
+  "heroNotConnected": "未连接",
+
+  "tabWifi": "WiFi",
+  "tabUsb": "USB",
+  "tabBluetooth": "蓝牙",
+
+  "serverAddressLabel": "电脑服务器地址",
+  "serverAddressHint": "例如: 192.168.1.100:8080",
+  "wifiSameNetworkHint": "手机与电脑需连同一个 WiFi；地址在电脑端 AudioServer 界面可查。",
+  "portLabel": "端口",
+  "usbHint": "需 USB 线插好，并在电脑执行：adb reverse tcp:8080 tcp:8080",
+  "usbIphoneHint": "iPhone 暂无 USB 直连通道，请使用 WiFi 连接：填电脑的局域网 IP。",
+  "bluetoothHint": "蓝牙通道暂未开放：经典蓝牙带宽约 1 Mbps，只够传音频、带不动画面。当前所有功能统一走 WiFi 局域网或 USB 有线直连。",
+
+  "btnConnect": "连接",
+  "btnDisconnect": "断开连接",
+  "btnConnectWithSwitch": "连接（会先断开{mode}）",
+  "@btnConnectWithSwitch": {
+    "placeholders": {
+      "mode": {
+        "type": "String"
+      }
+    }
+  },
+  "btnConnecting": "连接中...",
+
+  "statusTapToStart": "点击连接按钮开始",
+  "statusConnecting": "正在连接...",
+  "statusReceiving": "正在接收音频流",
+  "statusConnectFailed": "连接失败，请确认电脑端服务器已启动、地址与端口正确",
+  "errEnterAddress": "请输入服务器地址",
+  "errEnterPort": "请输入端口号",
+
+  "consentTitle": "电脑请求使用你的摄像头",
+  "consentIgnore": "忽略",
+  "consentAgree": "同意",
+
+  "devSpeaker": "音响",
+  "devMic": "麦克风",
+  "devCamera": "摄像头",
+
+  "statusDisabled": "已禁用",
+  "statusOffline": "未连接",
+  "statusPendingCam": "待电脑请求",
+  "statusPendingMic": "待授权",
+  "statusStandby": "待命",
+  "statusPlayingNow": "正在播放",
+  "statusRecordingNow": "录音中",
+  "statusFilmingNow": "取景中",
+
+  "gateDisabled": "已禁用",
+  "gateEnabledOffline": "已启用 · 未连接",
+  "gateEnabledPendingCam": "已启用 · 等待电脑请求",
+  "gateEnabledPendingMic": "已启用 · 等待授权录音",
+  "gateEnabledStandby": "已启用 · 待命",
+  "gateEnabledActive": "已启用 · 使用中",
+
+  "gateSubDisabled": "本设备功能已关闭：会话注销、硬件不开启，电脑那边再怎么调用也唤不起它。",
+  "gateSubOffline": "功能已启用，但还没连上电脑。连上后自动进入待命。",
+  "gateSubPendingCam": "相机硬件是关着的。电脑端点「请求手机开启摄像头」后，手机会弹确认横幅，同意才登记会话进入待命 —— 这一步是摄像头的隐私闸门，刻意保留。",
+  "gateSubPendingMic": "手机还没有录音权限，因此麦克风没有进入待命。进入麦克风页点「授权」，系统弹窗允许一次后即可长期使用。",
+
+  "standbySpeaker": "会话已就绪，电脑还没在推声音。拨到「禁用」= 立刻停止接收音频流。",
+  "standbyMic": "会话已登记，麦克风硬件关闭（无绿点、不耗电）。拨到「禁用」= 立刻注销。",
+  "standbyCamera": "会话已登记，相机硬件关闭（无绿点、不耗电）。拨到「禁用」= 立刻注销会话并关闭相机。",
+
+  "activeSpeaker": "电脑此刻正在把声音推给手机播放。拨到「禁用」= 立即停止播放并断开该通道。",
+  "activeMic": "电脑应用此刻正在录手机麦克风，硬件已开启。拨到「禁用」= 立即注销并关麦。",
+  "activeCamera": "电脑应用此刻正持有虚拟摄像头，相机硬件开着。拨到「禁用」= 立即注销会话并关闭相机。",
+
+  "detailDisabled": "已禁用 · 电脑无法使用",
+  "detailOffline": "连接电脑后自动进入待命",
+  "detailPendingCam": "已连接 · 电脑请求后手机确认即取景",
+  "detailPendingMic": "已连接 · 等待在手机上授权录音",
+  "detailStandby": "待命中 · 硬件已关闭，不耗电",
+  "detailActiveSpeaker": "正在播放电脑推来的声音",
+  "detailActiveMic": "电脑此刻正在使用你的麦克风",
+  "detailActiveCamera": "电脑此刻正在使用你的摄像头",
+
+  "gateOff": "← 禁用",
+  "gateOffCurrent": "← 禁用（当前）",
+  "gateOn": "启用 →",
+  "gateOnCurrent": "启用（当前）→",
+
+  "grantPermission": "授权",
+  "paramsTitle": "参数",
+
+  "micNoPermission": "手机还没有录音权限，授权后才能当电脑麦克风",
+  "micStateRecording": "录音中：麦克风硬件已开启",
+  "micStateStandby": "待命：麦克风硬件已关闭",
+  "micStateStarting": "正在开启…",
+  "micStateOff": "未启用",
+  "micUplinkBitrate": "上行码率",
+  "micUplinkFormat": "{khz} kHz · 单声道",
+  "@micUplinkFormat": {
+    "placeholders": {
+      "khz": {
+        "type": "int"
+      }
+    }
+  },
+  "micUplinkSampleRate": "上行采样率",
+  "micRate48": "48 kHz · 直通",
+  "micRate44": "44.1 kHz · PC 重采样",
+  "micParamHint": "待命中改档位即刻生效：重发一次登记（mic_start）让服务器知道新速率；正在录音则会静默重启采集，约 100ms 静音间隙，几乎无感。",
+  "micHowToUse": "电脑上的会议 / 语音输入软件，把输入设备选为\n\"CABLE Output (VB-Audio Virtual Cable)\" 即可\n（连上电脑后手机自动待命；电脑一用麦克风手机才开录，\n电脑停用后手机立刻停止录音）",
+
+  "micStatusDisabled": "已禁用 —— 电脑无法使用手机麦克风",
+  "micStatusConnectedPerm": "已连接电脑，点下方按钮授权录音后即可直接使用",
+  "micStatusConnectedAuto": "连接电脑后自动进入待命，无需任何操作",
+  "micStatusMuted": "已静音 —— 电脑用麦克风时也不会录音",
+  "micStatusStandbyLong": "待命中 —— 麦克风已关闭，电脑用到时自动开启",
+  "micStatusOpening": "电脑正在使用，正在开启麦克风...",
+  "micStatusLive": "录音中 —— 电脑此刻正在使用你的麦克风",
+  "micBadgeWaitingPerm": "等待授权录音",
+  "micBadgeOff": "未启用",
+  "micBadgeMuted": "已静音 · 等待解除",
+  "micBadgeStandby": "待命中 · 麦克风硬件已关闭",
+  "micBadgeStarting": "正在开启…",
+  "micBadgeLive": "录音中 · 电脑此刻正在使用",
+
+  "camNoPermission": "手机还没有相机权限，授权后电脑才能使用",
+  "camQuality": "清晰度",
+  "camNoModes": "当前镜头暂无可用档位",
+  "camProbing": "探测中…（连上电脑后自动读取手机支持的档位）",
+  "camAutoHighest": "自动（最高档）",
+  "camRotate": "旋转 {deg}°",
+  "@camRotate": {
+    "placeholders": {
+      "deg": {
+        "type": "int"
+      }
+    }
+  },
+  "camParamHint": "参数在任何状态都可以修改：正在取景 → 静默重启相机套用；待命 / 未连接 → 只记下选择，等相机开启时自动套用；拨到「禁用」才会锁住参数（改了也不会生效，不该给假设置）。",
+  "camFrozenLabel": "已冻结 · 点按恢复画面",
+  "camFreezeLabel": "冻结画面（会话保留，画面停住）",
+  "camHowToUse": "电脑上的会议 / 相机 / 直播软件，把摄像头选为\n\"Unity Video Capture\" 即可\n（启用后手机待命；电脑一打开观看手机才开相机，\n电脑关闭观看后手机立即熄灭相机）",
+  "camIosNote": "iPhone 注意：受 iOS 系统限制，摄像头必须在\n本页面亮屏待命才能推流（退后台/锁屏会断），\n麦克风与喇叭不受此限制",
+  "camRecOverlay": "REC · 电脑正在使用你的摄像头",
+  "camPreviewOff": "相机未开启 · 待命中",
+  "camTapFullscreen": "点按全屏",
+  "camExitFullscreen": "退出全屏",
+  "camStamp": "{quality} · {facing}",
+  "@camStamp": {
+    "placeholders": {
+      "quality": {
+        "type": "String"
+      },
+      "facing": {
+        "type": "String"
+      }
+    }
+  },
+  "camRecStamp": "REC · {quality} · {facing}",
+  "@camRecStamp": {
+    "placeholders": {
+      "quality": {
+        "type": "String"
+      },
+      "facing": {
+        "type": "String"
+      }
+    }
+  },
+
+  "camStatusDisabled": "已禁用 —— 电脑无法使用手机摄像头",
+  "camStatusConnectedPerm": "已连接电脑，授权相机后即可使用",
+  "camStatusStandbyAuto": "连上电脑后自动待命；也可在电脑上请求，手机确认后启用",
+  "camStatusFrozen": "已冻结 —— 电脑观看时也不会开相机",
+  "camStatusStandbyLong": "待命中 —— 相机已关闭，电脑打开观看时自动取景",
+  "camStatusOpening": "电脑正在观看，正在开启相机...",
+  "camStatusLive": "取景中 —— 电脑此刻正在使用你的摄像头",
+  "camBadgeWaitingPerm": "等待授权相机",
+  "camBadgeOff": "未启用",
+  "camBadgeFrozen": "已冻结 · 等待解除",
+  "camBadgeStandby": "待命中 · 相机硬件已关闭",
+  "camBadgeOpening": "正在开启…",
+  "camBadgeLive": "取景中 · 电脑此刻正在观看",
+  "camForceStopped": "电脑端已强制关闭摄像头",
+
+  "facingBack": "后置",
+  "facingFront": "前置",
+  "switchToFront": "切换前置",
+  "switchToBack": "切换后置",
+
+  "errConnectFirst": "请先在首页连接电脑",
+  "errMicPermission": "需要录音权限才能当电脑麦克风",
+  "errCamPermission": "需要相机权限才能当电脑摄像头",
+  "errMicDenied": "录音权限被拒绝，请在系统设置中允许",
+  "errMicBusy": "麦克风被其他应用占用，关闭后重试",
+  "errMicUnsupported": "不支持的采样率/声道组合",
+  "errMicStart": "麦克风启动失败: {code}",
+  "@errMicStart": {
+    "placeholders": {
+      "code": {
+        "type": "String"
+      }
+    }
+  },
+  "errCamDenied": "相机权限被拒绝，请在系统设置中允许",
+  "errCamNoLens": "手机没有对应镜头",
+  "errCamTimeout": "相机打开超时，请关闭其他相机应用重试",
+  "errCamBusy": "相机被其他应用占用，关闭后重试",
+  "errCamStart": "相机启动失败: {code}",
+  "@errCamStart": {
+    "placeholders": {
+      "code": {
+        "type": "String"
+      }
+    }
+  },
+  "netError": "连接错误: {error}",
+  "@netError": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "netFailed": "连接失败: {error}",
+  "@netFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+
+  "spkMuteTitle": "本机静音",
+  "spkMuteSubtitle": "连接与电脑侧状态都保持，只是手机不出声",
+  "spkSourceLabel": "来源",
+  "spkSourceValue": "电脑系统声音（WASAPI 回环捕获）",
+  "spkFormatLabel": "音频格式",
+  "audioMono": "单声道",
+  "audioStereo": "立体声",
+  "spkFormatValue": "{khz} kHz · {ch} · 16bit",
+  "@spkFormatValue": {
+    "placeholders": {
+      "khz": {
+        "type": "String"
+      },
+      "ch": {
+        "type": "String"
+      }
+    }
+  },
+  "spkBitrateLabel": "链路速率",
+  "spkBitrateValue": "约 {mbps} Mbps",
+  "@spkBitrateValue": {
+    "placeholders": {
+      "mbps": {
+        "type": "String"
+      }
+    }
+  },
+  "spkReceivedLabel": "已接收",
+  "spkPlayStatusLabel": "播放状态",
+  "spkPlayDisconnected": "未连接",
+  "spkPlayMuted": "接收中（本机已静音）",
+  "spkPlayPlaying": "正在播放",
+  "spkPlayWaiting": "已连接 · 等待电脑推流",
+  "spkParamsLocked": "手机音量与缓冲档位（低延迟 ↔ 稳定）需要改造原生播放层（AudioTrack 的音量与 bufferDuration），本版暂未开放：音量请用机身侧键调节，缓冲由服务器按最低延迟策略固定。",
+  "spkHowToUse": "电脑上无需选择任何播放设备：AudioServer 直接抓取系统声音，\n手机连上后就是电脑的第二个扬声器。\n要彻底不让手机出声，把上方滑块拨到「禁用」即可。",
+
+  "settingsTitle": "设置",
+  "languageTitle": "语言",
+  "langAuto": "跟随系统",
+  "langEn": "English",
+  "langZh": "简体中文",
+  "langAutoCurrent": "已识别系统语言：{locale}",
+  "@langAutoCurrent": {
+    "placeholders": {
+      "locale": {
+        "type": "String"
+      }
+    }
+  },
+  "langHint": "全球通用词（WiFi、USB、IP、WebSocket、kHz）不翻译。你的选择会记在本机，杀进程重开仍认。"
+}

@@ -18,7 +18,7 @@
     <!-- 声明需要相机硬件，上架商店时用于设备过滤 -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <application
-        android:label="pc_speaker"
+        android:label="@string/app_name"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
