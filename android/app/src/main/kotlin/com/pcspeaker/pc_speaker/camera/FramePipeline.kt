@@ -38,7 +38,7 @@ internal class FramePipeline(
      * 单帧耗时不变但吞吐 ×N（帧与帧之间没有数据依赖，天然可并行）。
      */
     private val executor: ExecutorService =
-        Executors.newFixedThreadPool(CameraConfig.PIPELINE_WORKERS)
+        Executors.newFixedThreadPool(CameraConfig.ACTIVE_WORKERS)
 
     /**
      * 【v3.16】硬件编码专用线程：单线程，必须串行。
@@ -83,7 +83,7 @@ internal class FramePipeline(
      */
     val saturated: Boolean
         get() = inFlight.get() >= if (codec == VideoCodec.JPEG)
-            CameraConfig.PIPELINE_WORKERS else 1
+            CameraConfig.ACTIVE_WORKERS else 1
 
     fun onCallback() = stats.onCallback()
     fun onArrived() = stats.onArrived()

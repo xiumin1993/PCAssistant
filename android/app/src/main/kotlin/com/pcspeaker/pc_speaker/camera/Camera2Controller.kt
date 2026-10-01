@@ -60,9 +60,9 @@ internal class Camera2Controller(
         // 否则又会造成 backpressure）。
         val framePx = state.width * state.height
         val slots = if (framePx > 8_000_000)
-            CameraConfig.PIPELINE_WORKERS + 1
+            CameraConfig.ACTIVE_WORKERS + 1
         else
-            CameraConfig.PIPELINE_WORKERS + 2
+            CameraConfig.ACTIVE_WORKERS + 2
         imageReader = ImageReader.newInstance(
             state.width, state.height, ImageFormat.YUV_420_888, slots
         )

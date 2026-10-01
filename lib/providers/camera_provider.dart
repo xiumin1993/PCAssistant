@@ -306,7 +306,11 @@ class CameraProvider extends ChangeNotifier {
   /// 为什么不是 final/常量：切镜头会重建纹理（id 变），停相机后纹理作废，
   /// 所以每次开/切/停都要重新问原生一次（见 _refreshPreviewTexture）。
   CamPreviewTexture? _previewTexture;
-  CamPreviewTexture? get previewTexture => _previewTexture;
+
+  /// 【v3.16】A/B 开关生效点：强制 JPEG 解码预览时对外就"没有纹理"，
+  /// 界面自然退回 Image.memory 解码预览（开关就是下面的 forceJpegPreview）。
+  CamPreviewTexture? get previewTexture =>
+      forceJpegPreview ? null : _previewTexture;
 
   /// 开相机 / 切镜头之后重新取一次预览纹理。
   /// 取不到就置 null —— 界面据此自动退回 JPEG 解码预览，永远不会白屏。
@@ -438,6 +442,27 @@ class CameraProvider extends ChangeNotifier {
   // 质量调小 = 省带宽但画面出现块状马赛克。要调它请改原生，不要在这里加参数。
   static const List<int> _frameMagic = [0x03, 0x43, 0x41, 0x4D];
 
+  // ══════════════════════════════════════════════════════════════════
+  // 【v3.16】预览方案的 A/B 开关（改动小 → 用配置切换，不建分支）
+  // ══════════════════════════════════════════════════════════════════
+  // 预览历史上换过好几套做法，每一套都有它的适用场景。为了能随时把某套做法
+  // 拉回来对比（而不是靠回忆改代码），把可切换的部分收在这里。
+  //
+  // 改法：直接改下面的静态值 → 热重载/重新运行即生效，不用碰任何业务逻辑。
+
+  /// true = 强制走旧的 JPEG 解码预览，禁用 GPU 纹理直通。
+  ///
+  /// 什么时候需要：验证"GPU 直通到底省了多少"、或怀疑某台老设备的纹理
+  /// 通道有问题（画面花屏/黑屏）时，用它一键退回解码路径做对照。
+  static bool forceJpegPreview = false;
+
+  /// JPEG 解码预览的节流间隔（毫秒）。-1 = 用自适应值（跟随帧率，夹在
+  /// [42,100]）。设成 0 表示"来多少帧刷多少帧"（最流畅，但低端机可能更卡）。
+  ///
+  /// 它【只影响 JPEG 解码路径】：GPU 纹理直通时画面根本不经过 UI 线程，
+  /// 这个值是无效的（这也是两种预览最本质的差别）。
+  static int jpegThrottleMsOverride = -1;
+
   // ── 构造函数：本类的"接线总装" ──
   // 语法点：参数包在 {} 里 = 命名参数；required = 必传；
   // 冒号后面那段 `: _networkService = networkService` 叫【初始化列表】，
@@ -477,15 +502,21 @@ class CameraProvider extends ChangeNotifier {
         // 那这一帧就只管上传 PC，一次都不惊动 UI 线程（连 ValueNotifier
         // 都不通知，预览卡不再被每秒重建二十几次）。
         // 只有"没拿到纹理通道"的老路径才照旧把帧递给 Image.memory 解码。
-        if (_previewTexture == null) {
+        // 【v3.16】用【getter】而不是字段：A/B 开关强制 JPEG 预览时，
+        // getter 会返回 null，这里才正确地走回解码预览那条路
+        //（用字段的话会误判"有纹理" → 既不刷解码预览、也没纹理可看 = 黑屏）。
+        if (previewTexture == null) {
           _previewJpeg = jpeg; // 留一份给界面画预览
           final now = DateTime.now().millisecondsSinceEpoch;
         // 取"从 1970-01-01 UTC 起算的毫秒数"，是整数，做减法比 DateTime
         // 对象轻便得多（这个回调一秒可能被叫 30 次，能省则省）。
         // v3.8：节流间隔跟随实际帧率（相机出多少帧，界面就刷多少帧），
         // 不再是写死的 100ms。相机一秒出 N 帧时每帧都刷 = 一秒重建 N 次界面，
-        // 这个上限由 _previewThrottleMs 的 16ms 下限托底，不会失控。
-          if (now - _lastNotifyMs >= _previewThrottleMs) {
+        // 这个上限由 _previewThrottleMs 的 42ms 下限托底，不会失控。
+        // 【v3.16】jpegThrottleMsOverride >= 0 时用它（A/B 对比用）。
+          final interval =
+              jpegThrottleMsOverride >= 0 ? jpegThrottleMsOverride : _previewThrottleMs;
+          if (now - _lastNotifyMs >= interval) {
             _lastNotifyMs = now;
             // 【v3.8.4】只推给预览卡，不再 notifyListeners() 惊动整页
             //（理由见 previewFrame 字段注释：整页重建是主线程 1.66 核的元凶）。

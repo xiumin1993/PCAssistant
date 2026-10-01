@@ -71,8 +71,12 @@ internal class Camera1Controller(
     private var focusMode: String? = null
     private var refocusRunnable: Runnable? = null
 
-    /** 回调缓冲数量：够 PIPELINE_WORKERS 帧同时在飞 + 相机自己手里再拿几张 */
-    private val bufferCount = CameraConfig.PIPELINE_WORKERS + 3
+    /**
+     * 回调缓冲数量：够"同时在飞的帧"用 + 相机自己手里再拿几张周转。
+     * 用【实际生效的并行度】，保证与流水线车道数一致（A/B 调并行度时同步跟着变）。
+     */
+    private val bufferCount =
+        CameraConfig.ACTIVE_WORKERS + CameraConfig.CALLBACK_BUFFER_EXTRA
 
     /**
      * 起相机并开始出帧。返回 null = 成功，否则是错误码。
