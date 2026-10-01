@@ -92,15 +92,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get errEnterPort => 'Please enter the port number';
 
   @override
-  String get consentTitle => 'The PC wants to use your camera';
-
-  @override
-  String get consentIgnore => 'Ignore';
-
-  @override
-  String get consentAgree => 'Allow';
-
-  @override
   String get devSpeaker => 'Speaker';
 
   @override
@@ -201,7 +192,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get detailPendingCam =>
-      'Connected · the camera starts after the PC asks and you confirm';
+      'Connected - the camera starts automatically once the PC asks';
 
   @override
   String get detailPendingMic =>
@@ -273,6 +264,16 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get micParamHint =>
       'Changing the profile while on standby takes effect at once: the app re-sends the registration (mic_start) so the server learns the new rate. While recording, capture restarts silently with a gap of about 100 ms you barely notice.';
+
+  @override
+  String get micMuteLabel => 'Mute (session kept, phone mic off)';
+
+  @override
+  String get micMutedLabel => 'Muted · tap to resume recording';
+
+  @override
+  String get micMuteHint =>
+      'Mute keeps the session registered (the PC can still see this phone) but closes the recording hardware at once and tells the PC to drop the leftover audio. To make the PC unable to wake this phone at all, use \"Disabled\" at the top.';
 
   @override
   String get micHowToUse =>
@@ -481,6 +482,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get errCamNoLens => 'This phone has no such lens';
 
   @override
+  String get errCamNoCaps =>
+      'Cannot read the resolutions this lens supports — camera cannot start';
+
+  @override
   String get errCamTimeout =>
       'Opening the camera timed out — close other camera apps and retry';
 
@@ -583,8 +588,4 @@ class AppLocalizationsEn extends AppLocalizations {
   String langAutoCurrent(String locale) {
     return 'System language detected: $locale';
   }
-
-  @override
-  String get langHint =>
-      'Globally common words (WiFi, USB, IP, WebSocket, kHz) are not translated. Your choice is remembered on this phone.';
 }

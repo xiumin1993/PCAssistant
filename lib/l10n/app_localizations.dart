@@ -248,24 +248,6 @@ abstract class AppLocalizations {
   /// **'Please enter the port number'**
   String get errEnterPort;
 
-  /// No description provided for @consentTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'The PC wants to use your camera'**
-  String get consentTitle;
-
-  /// No description provided for @consentIgnore.
-  ///
-  /// In en, this message translates to:
-  /// **'Ignore'**
-  String get consentIgnore;
-
-  /// No description provided for @consentAgree.
-  ///
-  /// In en, this message translates to:
-  /// **'Allow'**
-  String get consentAgree;
-
   /// No description provided for @devSpeaker.
   ///
   /// In en, this message translates to:
@@ -443,7 +425,7 @@ abstract class AppLocalizations {
   /// No description provided for @detailPendingCam.
   ///
   /// In en, this message translates to:
-  /// **'Connected · the camera starts after the PC asks and you confirm'**
+  /// **'Connected - the camera starts automatically once the PC asks'**
   String get detailPendingCam;
 
   /// No description provided for @detailPendingMic.
@@ -577,6 +559,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Changing the profile while on standby takes effect at once: the app re-sends the registration (mic_start) so the server learns the new rate. While recording, capture restarts silently with a gap of about 100 ms you barely notice.'**
   String get micParamHint;
+
+  /// No description provided for @micMuteLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Mute (session kept, phone mic off)'**
+  String get micMuteLabel;
+
+  /// No description provided for @micMutedLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Muted · tap to resume recording'**
+  String get micMutedLabel;
+
+  /// No description provided for @micMuteHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Mute keeps the session registered (the PC can still see this phone) but closes the recording hardware at once and tells the PC to drop the leftover audio. To make the PC unable to wake this phone at all, use \"Disabled\" at the top.'**
+  String get micMuteHint;
 
   /// No description provided for @micHowToUse.
   ///
@@ -926,6 +926,12 @@ abstract class AppLocalizations {
   /// **'This phone has no such lens'**
   String get errCamNoLens;
 
+  /// No description provided for @errCamNoCaps.
+  ///
+  /// In en, this message translates to:
+  /// **'Cannot read the resolutions this lens supports — camera cannot start'**
+  String get errCamNoCaps;
+
   /// No description provided for @errCamTimeout.
   ///
   /// In en, this message translates to:
@@ -1099,12 +1105,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'System language detected: {locale}'**
   String langAutoCurrent(String locale);
-
-  /// No description provided for @langHint.
-  ///
-  /// In en, this message translates to:
-  /// **'Globally common words (WiFi, USB, IP, WebSocket, kHz) are not translated. Your choice is remembered on this phone.'**
-  String get langHint;
 }
 
 class _AppLocalizationsDelegate

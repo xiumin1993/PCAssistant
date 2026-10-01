@@ -16,8 +16,8 @@
 //                     ├─ _ModeTabs         WiFi / USB / 蓝牙 三个 Tab（各自上色）
 //                     ├─ _AddressArea      当前 Tab 对应的输入区
 //                     ├─ _ConnectButton    唯一的连接动作入口
-//                     ├─ _ConsentBanner    电脑请求用摄像头时的"同意/忽略"横幅
 //                     └─ _DeviceCard ×3    音响 / 麦克风 / 摄像头 详情页入口
+//                     （v3.8 起不再有 _ConsentBanner：摄像头请求免确认直开）
 //
 // 阅读嵌套结构的技巧：从最外层往里剥，一层只做一件事。
 // ----------------------------------------------------------------------------
@@ -54,8 +54,9 @@ import '../providers/connection_provider.dart';
 // 网络状态枚举（ConnectionStatus）定义在这里，Tab 上色要用它做 switch
 import '../services/network_service.dart';
 
-// 摄像头状态管理器：首页只保留"电脑请求使用摄像头"的确认横幅
-import '../providers/camera_provider.dart';
+// v3.8：CameraProvider 的 import 随 _ConsentBanner 一起移除 —— 首页现在
+// 只经 DeviceProvider 读摄像头的状态词，不再直接订 CameraProvider。
+// （改动原则：删掉一个组件，就把它独有的依赖也带走，别留无用 import。）
 
 // 三设备总闸 + 状态账本（首页入口卡的状态词全部读它）
 import '../providers/device_provider.dart';
@@ -269,16 +270,14 @@ class HomeScreen extends StatelessWidget {
                     const SizedBox(height: 28),
 
                     // ==========================================================
-                    // ⑥ 摄像头授权横幅（电脑主动请求时才出现）
-                    // ==========================================================
-                    // 长期否决权在设备详情页的总闸（拨到禁用连横幅都不弹）；
-                    // 这里的"忽略/同意"是一次会话的否决权，两者分工不同。
-                    const _ConsentBanner(),
-
-                    // ==========================================================
-                    // ⑦ 三台设备的入口卡：音响 / 麦克风 / 摄像头
+                    // ⑥ 三台设备的入口卡：音响 / 麦克风 / 摄像头
                     // ==========================================================
                     // 蓝牙模式暂时无摄像头通路（原型里明确要求隐藏该卡）。
+                    // v3.8：这里原本还夹着一块"电脑请求使用摄像头"的确认横幅
+                    // （_ConsentBanner）。按产品要求取消二次确认后，PC 发来
+                    // cam_request 时 CameraProvider 直接登记进待命，不再需要
+                    // 用户点"同意"。想彻底不给用，去摄像头详情页把总闸拨到
+                    // "禁用"—— 那才是唯一、且能跨会话生效的否决权。
                     Consumer<DeviceProvider>(
                       builder: (context, dev, _) {
                         return Column(
@@ -733,80 +732,11 @@ class _ConnectButton extends StatelessWidget {
   }
 }
 
-// ============================================================================
-// _ConsentBanner —— 电脑请求使用手机摄像头的确认横幅
-// ----------------------------------------------------------------------------
-// 只有 CameraProvider.requestPending 为 true（服务器推来 cam_request）时存在。
-// "忽略"= 这一次不给用；长期不给用要去摄像头详情页把总闸拨到禁用。
-// ============================================================================
-class _ConsentBanner extends StatelessWidget {
-  const _ConsentBanner();
-
-  @override
-  Widget build(BuildContext context) {
-    // 注意：这是首页里嵌套的第二个 Consumer（外圈订 ConnectionProvider，
-    // 这里订 CameraProvider）。一个组件树可以同时订阅多个 Provider，
-    // 谁 notifyListeners 就只重建谁盖住的那一小块，互不牵连。
-    return Consumer<CameraProvider>(
-      builder: (context, cam, _) {
-        // 没有待确认请求 → 返回 SizedBox.shrink()：一个"零尺寸"的空占位，
-        // 等于这里什么都不画。比再套一层 Visibility 组件更轻，
-        // 也是 Flutter 里"条件不成立时渲染什么"的惯用答案。
-        if (!cam.requestPending) return const SizedBox.shrink();
-        final l10n = AppLocalizations.of(context);
-        return Container(
-          width: 320,
-          margin: const EdgeInsets.only(bottom: 16),
-          decoration: BoxDecoration(
-            color: Colors.red.shade50,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.red.shade200),
-          ),
-          padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.videocam, color: Colors.red.shade600, size: 22),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      l10n.consentTitle,
-                      style: TextStyle(
-                        color: Colors.red.shade700,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              // 按钮行：MainAxisAlignment.end = 所有孩子推到主轴（水平）末端，
-              // 于是"忽略/同意"两个按钮贴着横幅右下角排。
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: () => cam.declineRequest(),
-                    child: Text(l10n.consentIgnore),
-                  ),
-                  const SizedBox(width: 4),
-                  FilledButton(
-                    style:
-                        FilledButton.styleFrom(backgroundColor: Colors.red.shade600),
-                    onPressed: () => cam.acceptRequest(),
-                    child: Text(l10n.consentAgree),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-}
+// v3.8：这里原本是 _ConsentBanner（电脑请求用摄像头的"同意/忽略"横幅）。
+// 二次确认取消后整块删除：CameraProvider 收 cam_request 即直接进待命，
+// 首页不再需要"等用户表态"的界面；唯一否决权回到设备详情页的总闸。
+// 顺带把三条只服务于它的文案键（consentTitle / consentIgnore / consentAgree）
+// 从 .arb 与生成文件里一起清掉 —— 死文案比死代码更难被发现。
 
 // ============================================================================
 // _DeviceCard —— 一台设备的入口卡（图标 + 名称 + 状态徽标 + 说明行）

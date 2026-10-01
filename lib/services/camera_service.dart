@@ -54,8 +54,11 @@
 // 【原生侧的三个魔数（在 CameraEngine.kt，本文件只是把它们透传）】
 //   · JPEG 质量 = 60（约 310 行 nv21ToJpeg(..., 60)）：网络传输场景的甜点值，
 //     再高体积暴涨带宽吃紧，再低马赛克明显。
-//   · 帧率限幅 1~30（约 185 行 fps.coerceIn(1, 30)）：网络+CPU 场景 30fps 封顶，
-//     再高只是丢帧、白花电量。
+//   · 帧率跟随设备（约 185 行 fps.coerceIn(1, 240)）：v3.8 起【不再】封顶 30fps，
+//     能力探测报多少就跑多少；真正的约束由 `CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES`
+//     提供（bg thread 会挑设备真支持的那一段，挑不到才退回设备最快的那段）。
+//   · 分辨率跟随设备（getCapabilities 的 filter）：v3.8 起只挡 1080p 以上，
+//     不再写死 720p —— 原因是更高档要靠 CPU 软件 JPEG 编码，会把帧率压垮。
 //   · 能力探测查不到帧率时回退 33_000_000L 纳秒 = 33ms/帧 ≈ 30fps（约 146 行）。
 //   · 压缩忙时直接【丢帧】（jpegBusy 开关，约 268 行）：宁可跳帧也不堆积延迟。
 //
@@ -108,8 +111,13 @@ class CamLensCaps {
       // ((... as List?) ?? const []) 的意思是：不是列表就当空列表处理，
       // 后面的 .map(...).toList() 于是安全地返回 []，不会因 null 崩溃。
       // 注意：原生传来的每一项又是 Map，所以内层要 s as Map 再交给 CamSizeCaps。
+      // 【v3.8.3】过滤掉"不完整"的档位：宽高缺失（0）或帧率缺失/非法（≤0）。
+      // 以前 maxFps 缺失兜底 15 —— 那 15 是代码编的，设备明明没告诉我们
+      // 这档能跑多少帧，却在下拉框里显示成"…@ 15fps"，用户在骗自己。
+      // 现在凡是设备没报全的一律丢掉：宁可少一档可选，也不给用户假档。
       sizes: ((m['sizes'] as List?) ?? const [])
           .map((s) => CamSizeCaps.fromMap(s as Map))
+          .where((c) => c.isValid)
           .toList(),
     );
   }
@@ -142,13 +150,17 @@ class CamSizeCaps {
 
   const CamSizeCaps({required this.width, required this.height, required this.maxFps});
 
+  /// 这一档是否是【设备完整上报】的：宽高帧率三项都得有且 > 0。
+  /// false 的档会在 CamLensCaps.fromMap 里被过滤掉 ——
+  /// 半截数据不能进下拉框，更不能拿去开相机。
+  bool get isValid => width > 0 && height > 0 && maxFps > 0;
+
   factory CamSizeCaps.fromMap(Map<dynamic, dynamic> m) => CamSizeCaps(
-        // 宽高缺失兜底 0（表示"这条无效"，上层挑档时会因面积 0 被自然忽略）；
-        // maxFps 缺失兜底 15：给一个"保守但可用"的帧率，
-        // 上层还会再 clamp(1, 30)（见 camera_provider._pickBestProfile）。
+        // 三个字段都直接取原值，缺失就是 0（= 无效，随后被 where 过滤）。
+        // 不再给任何"代码拍的"兜底数字。
         width: m['width'] as int? ?? 0,
         height: m['height'] as int? ?? 0,
-        maxFps: m['maxFps'] as int? ?? 15,
+        maxFps: m['maxFps'] as int? ?? 0,
       );
 
   Map<String, dynamic> toMap() =>
@@ -228,16 +240,21 @@ class CameraService {
   ///
   /// @param facing  "back" 后置 / "front" 前置（设计决定：默认后置）
   /// @param width/height  选定的画质档位
-  /// @param fps     目标帧率（原生内部再限幅 1~30）
-  // 默认值 640×480@30 的来由：这是所有 Android 设备几乎都支持的"保底档"，
-  // 万一能力探测失败（camera_provider 的 catch 分支）也能开到东西。
-  // 实际使用时 CameraProvider 传的是探测出来的最高档或用户手选档。
-  // 为什么默认后置：隐私上"后置不拍自己"、画质普遍更好（设计决定，记在 provider 里）。
+  /// @param fps     目标帧率（v3.8 起原生只做合法性收边 1~240，不再封顶 30）
+  // ==========================================================================
+  // 【v3.8.3】width/height/fps 改成【必填】，没有默认值。
+  // 以前写 `int width = 640, int height = 480, int fps = 30` —— 那等于说
+  // "调用方忘了传就用 640×480@30"，而这个数是代码拍的，不是手机报的。
+  // 只要存在这个默认值，就总有某条路径会静默地用它去开相机（尤其是能力
+  // 探测失败的分支），用户看到的是"莫名其妙的糊画面"。
+  // 去掉默认值后，编译器会【强制】每个调用点都必须先拿到真实档位 ——
+  // 用类型系统保证"档位只能来自设备"，比靠注释提醒可靠得多。
+  // ==========================================================================
   Future<String?> start({
-    String facing = 'back',
-    int width = 640,
-    int height = 480,
-    int fps = 30,
+    required String facing,
+    required int width,
+    required int height,
+    required int fps,
   }) async {
     if (isRunning) return null; // 幂等：已在跑不重复启动
 

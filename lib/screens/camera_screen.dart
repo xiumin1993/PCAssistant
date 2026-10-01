@@ -1,13 +1,15 @@
 // ============================================================================
 // camera_screen.dart —— 手机摄像头详情页（v3.6 改版）
 // ----------------------------------------------------------------------------
-// 页面顺序（用户逐轮确认过的最终顺序，别再调整）：
+// 页面顺序（v3.8 起： DeviceGate 提到最前，与音响/麦克风两页完全一致）：
 //   AppBar：设备名 + 状态胶囊
-//   └─ ① 取景预览卡（最上方；未开相机时是灰色占位 = 硬件真没开的证据）
-//   └─ ② DeviceGate 状态明说块（启用/禁用总闸）
+//   └─ ① DeviceGate 状态明说块（启用/禁用总闸）—— 三页统一，页首第一块
+//   └─ ② 取景预览卡（未开相机时是灰色占位 = 硬件真没开的证据）
 //   └─ ③ 参数：清晰度 / 镜头 / 旋转 ——【任何状态都能改】，只有已禁用才锁
 //   └─ ④ 冻结画面（会话保留，画面停住）
 //   └─ ⑤ 使用说明 + iOS 平台限制提示
+//
+// 注：① / ② 在 v3.8 之前是反过来的（预览卡压着总闸），本轮按用户要求调换。
 //
 // 本轮按用户要求删掉的东西（不要再加回来）：
 //   · "通道：Unity Video Capture / OBS"状态块 —— 顶栏徽标就是唯一占用指示；
@@ -122,39 +124,51 @@ class CameraScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // ============ ① 取景预览卡（永远在最上方）============
-                  // previewJpeg 就是"最新一帧的完整 JPEG 字节"（Uint8List?），
-                  // 由 CameraService 采集、CameraProvider 缓存后递下来给
-                  // Image.memory 显示 —— 解码与逐帧刷新节奏见 _PreviewCard 头注。
-                  _PreviewCard(
-                    previewJpeg: provider.previewJpeg,
-                    isLive: isLive,
-                    // 角标：真实读数（不是写死的样例数据）
-                    stamp: isLive
-                        ? l10n.camStamp(
-                            provider.qualityText, provider.facingTextOf(l10n))
-                        : null,
-                    // 整卡点按 = 全屏（原型上写的是"点按全屏"）
-                    onFullscreen: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const _FullscreenPreviewScreen(),
-                          ),
-                        ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // ============ ② 状态明说块（启用 / 禁用总闸）============
+                  // ============ ① 状态明说块（启用 / 禁用总闸）============
+                  // v3.8：与音响页（speaker_screen）、麦克风页（mic_screen）对齐 ——
+                  // 三台设备的"唯一开关"统一占住页首第一块，用户从上往下一眼先看到
+                  // "这台设备启用了吗"。摄像头页原先被一张取景预览卡压在下面，
+                  // 现在预览卡退到第 ② 位。
                   const DeviceGate(device: PcDevice.camera),
                   const SizedBox(height: 16),
 
-                  // ============ ②' 缺权限提示（系统授权，不是功能开关）========
+                  // ============ ② 取景预览卡 ============
+                  // previewJpeg 就是"最新一帧的完整 JPEG 字节"（Uint8List?），
+                  // 由 CameraService 采集、CameraProvider 缓存后递下来给
+                  // Image.memory 显示 —— 解码与逐帧刷新节奏见 _PreviewCard 头注。
+                  // 【v3.8.4】整页里**只有这一块**订阅"帧刷新通道" previewFrame。
+                  // 以前帧刷新走 notifyListeners()，外层 Consumer 把整个页面
+                  // （开关、下拉框、权限提示、按钮…）每秒重建十几次 —— 实测
+                  // Dart 主线程独吃 1.66 核。现在帧只推到这个小通道，
+                  // 重建范围收敛到预览卡本身，其余控件纹丝不动。
+                  ValueListenableBuilder<Uint8List?>(
+                    valueListenable: provider.previewFrame,
+                    builder: (context, jpeg, _) => _PreviewCard(
+                      previewJpeg: jpeg,
+                      isLive: isLive,
+                      // 角标：真实读数（不是写死的样例数据）
+                      stamp: isLive
+                          ? l10n.camStamp(provider.qualityText,
+                              provider.facingTextOf(l10n))
+                          : null,
+                      // 整卡点按 = 全屏（原型上写的是"点按全屏"）
+                      onFullscreen: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const _FullscreenPreviewScreen(),
+                            ),
+                          ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // ============ ①' 缺权限提示（系统授权，不是功能开关）========
                   // 运行时权限的真实链路（本项目【没有】用 permission_handler 之类的
                   // 包，是自己经平台通道向 Android 要权限）：
                   //   按"授予权限" → provider.toggle() → CameraService.ensurePermission()
                   //   → MethodChannel requestCamPermission → Android 弹系统授权窗，
                   //   Dart 端的 await 会一直挂到用户点"允许/拒绝"才有返回值。
                   // 用户拒绝后界面上留下什么：这条琥珀色横幅一直在
-                  //   （needsPermission 保持 true），外加下方一行红色错误字（②''）。
+                  //   （needsPermission 保持 true），外加下方一行红色错误字（①''）。
                   // 为什么"刚授权完必须把开硬件的流程整个重走一遍"：之前那次因缺权限
                   //   失败的打开请求早就以 PERMISSION_DENIED 返回了，系统事后放行并不
                   //   会让它自动重试 —— 只能重新调一次"查权限→登记会话→等唤醒开相机"
@@ -187,7 +201,7 @@ class CameraScreen extends StatelessWidget {
                     const SizedBox(height: 16),
                   ],
 
-                  // ============ ②'' 错误提示（有才显示）============
+                  // ============ ①'' 错误提示（有才显示）============
                   if (errorText != null) ...[
                     Text(
                       errorText,
@@ -251,13 +265,15 @@ class CameraScreen extends StatelessWidget {
                                   DropdownMenuItem(
                                     value: '$i',
                                     child: Text(
-                                      // maxFps 上限截到 30：虚拟摄像头吃不下更高，
-                                      // 且手机宣称 60fps 的档位实际跑不稳
+                                      // v3.8：以前这里把 maxFps 先 clamp(1, 30) 再显示，
+                                      // 于是支持 60fps 的档被显示成 "…@ 30fps" —— 界面在说谎，
+                                      // 用户明明有更快的镜头却永远看不到。现在如实显示
+                                      // 这颗镜头报出来的真实上限。
                                       // 注意没有单独的"帧率"控件：每一档自带 maxFps，
-                                      // 选中后由 provider 取 min(该档上限, 30) 当当前
-                                      // fps（见 CameraProvider.selectProfile），
+                                      // 选中后由 provider 直接用该档上限当当前 fps
+                                      // （见 CameraProvider.selectProfile），
                                       // 界面只展示这一对绑定的结果。
-                                      '${sizes[i].width}×${sizes[i].height} @ ${sizes[i].maxFps.clamp(1, 30)}fps',
+                                      '${sizes[i].width}×${sizes[i].height} @ ${sizes[i].maxFps.clamp(1, 240)}fps',
                                       style: const TextStyle(fontSize: 14),
                                     ),
                                   ),
@@ -401,12 +417,12 @@ class CameraScreen extends StatelessWidget {
 // 这个 ImageProvider，交给 Flutter 自带的编解码器解码成一张 GPU 纹理再上屏
 // —— 不需要临时文件、不走网络。每次 Consumer 重建时传进来的是"最新一帧"，
 // Image 发现字节换了就换图，gaplessPlayback 保证换的瞬间仍显示旧图。
-// 每帧刷新的节奏由 Provider 端决定：CameraProvider 里有一道 100ms 的
-// 时间戳闸门（_lastNotifyMs）才 notifyListeners，界面最多 10fps。
-// 为什么不能每帧都 notifyListeners：相机一秒可出 30 帧，一帧刷一次 =
-// 一秒重建整页 30 次，CPU 全烧在重画界面上，手机发热耗电、预览反而卡；
-// 10fps 人眼看着已经连贯。⚠ 注意节流只影响【手机自己的预览】——
-// 发给 PC 虚拟摄像头的帧是逐帧走的，不受这里拖累。
+// 每帧刷新的节奏由 Provider 端决定：CameraProvider 有时间戳闸门
+// （_lastNotifyMs），间隔 = 1000/帧率（30fps→33ms），上限夹在 ~24fps ——
+// 为什么不能每帧都 notifyListeners：相机一秒可出 30+ 帧，一帧刷一次 =
+// 一秒重建整页 N 次，CPU 全烧在重画界面上，手机发热耗电、预览反而卡。
+// ⚠ 注意节流只影响【手机自己的预览】——发给 PC 虚拟摄像头的帧是
+// 逐帧走的，不受这里拖累。
 // 黑底取景框的层级（从外到内念一遍就知道为什么这么排）：
 //   ClipRRect（把圆角裁出来，子组件溢出圆角的部分被剪掉）
 //   → ColoredBox 黑底（图片按 contain 显示时上下/左右的留白也是黑的，像取景器）
@@ -416,6 +432,16 @@ class CameraScreen extends StatelessWidget {
 //   本卡片没有用 FittedBox——缩放是交给 Image 自己的 fit: BoxFit.contain
 //   （完整显示不裁切，留黑边）；全屏页则换成 cover（铺满屏，超出部分裁掉）。
 // ============================================================================
+/// 预览解码宽度（物理像素）＝ 取景窗逻辑宽 × 设备像素比，夹在 [160, 1920]。
+/// 宽度拿不到（布局异常）返回 null，让解码器按原始尺寸兜底 —— 宁可多花一点，
+/// 也不要解码出一张 0 宽的废图。
+int? _previewDecodeWidth(BuildContext context, BoxConstraints box) {
+  final w = box.maxWidth;
+  if (!w.isFinite || w <= 0) return null;
+  final dpr = MediaQuery.of(context).devicePixelRatio;
+  return (w * dpr).round().clamp(160, 1920).toInt();
+}
+
 class _PreviewCard extends StatelessWidget {
   final Uint8List? previewJpeg;
   final bool isLive;
@@ -491,10 +517,22 @@ class _PreviewCard extends StatelessWidget {
                               ),
                             ),
                           )
-                        : Image.memory(
-                            previewJpeg!,
-                            fit: BoxFit.contain,
-                            gaplessPlayback: true,
+                        // LayoutBuilder：量出取景窗的【实际逻辑宽】，交给下面的
+                        // cacheWidth 换算成物理像素 —— 解码尺寸跟着显示尺寸走。
+                        : LayoutBuilder(
+                            builder: (context, box) => Image.memory(
+                              previewJpeg!,
+                              fit: BoxFit.contain,
+                              gaplessPlayback: true,
+                              // 低质量采样：预览缩放用双线性就够了，
+                              // 默认的中/高质量在低端机上光栅成本明显更高。
+                              filterQuality: FilterQuality.low,
+                              // 【按显示尺寸解码】（v3.8.3）：整张 JPEG 每帧
+                              // 全尺寸解码再缩小显示，是"帧率提上去后预览变卡"
+                              // 的大头。cacheWidth 让解码器直接产出"显示那么宽"
+                              // 的位图（解码量与像素数成正比）。
+                              cacheWidth: _previewDecodeWidth(context, box),
+                            ),
                           ),
                   ),
                   // 参数角标（左下角真实读数）
@@ -604,25 +642,33 @@ class _FullscreenPreviewScreenState extends State<_FullscreenPreviewScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      // 全屏页同样整页包在 Consumer 里：预览帧按 100ms 节流推来一次
-      // notifyListeners，这里就重建一次，Image.memory 换上新帧 —— 和主页面同法。
+      // 全屏页：外层 Consumer 只负责"状态类"重建（横幅文案等低频变化），
+      // 逐帧画面交给下面的 ValueListenableBuilder 单独订阅 previewFrame ——
+      // 与主页面同一套做法（理由见主页面预览卡处的 v3.8.4 注释）。
       body: Consumer<CameraProvider>(
         builder: (context, provider, child) {
           final l10n = AppLocalizations.of(context);
-          final jpeg = provider.previewJpeg;
           // Stack = 叠放：非 Positioned 的子组件从底铺起，Positioned 的钉角落。
           // fit: StackFit.expand 让打底的那张图（Image/占位）自动撑满整屏，
           // 不用自己算屏幕宽高。
           return Stack(
             fit: StackFit.expand,
             children: [
-              jpeg == null
-                  ? const Center(
-                      child: Icon(Icons.videocam_off,
-                          color: Colors.white24, size: 72),
-                    )
-                  : Image.memory(jpeg,
-                      fit: BoxFit.cover, gaplessPlayback: true),
+              // 【v3.8.4】同理：只让"这一张图"订阅帧通道 previewFrame，
+              // 帧刷新不再连累全屏页里的横幅、按钮一起重建。
+              ValueListenableBuilder<Uint8List?>(
+                valueListenable: provider.previewFrame,
+                builder: (context, frame, _) => frame == null
+                    ? const Center(
+                        child: Icon(Icons.videocam_off,
+                            color: Colors.white24, size: 72),
+                      )
+                    : Image.memory(frame,
+                        fit: BoxFit.cover,
+                        gaplessPlayback: true,
+                        // 全屏铺满是大面积缩放，低质量采样省光栅（同预览卡）
+                        filterQuality: FilterQuality.low),
+              ),
               // 顶部红色横幅（硬件开着才见）——避开刘海/圆角安全区。
               // 注意：Positioned 必须是 Stack 的【直接】子组件，
               // 不能包 SafeArea/Padding（那会让它找不到 Stack 父级，

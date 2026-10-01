@@ -88,15 +88,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get errEnterPort => '请输入端口号';
 
   @override
-  String get consentTitle => '电脑请求使用你的摄像头';
-
-  @override
-  String get consentIgnore => '忽略';
-
-  @override
-  String get consentAgree => '同意';
-
-  @override
   String get devSpeaker => '音响';
 
   @override
@@ -186,7 +177,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get detailOffline => '连接电脑后自动进入待命';
 
   @override
-  String get detailPendingCam => '已连接 · 电脑请求后手机确认即取景';
+  String get detailPendingCam => '已连接 · 电脑请求后自动取景';
 
   @override
   String get detailPendingMic => '已连接 · 等待在手机上授权录音';
@@ -256,6 +247,16 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String get micParamHint =>
       '待命中改档位即刻生效：重发一次登记（mic_start）让服务器知道新速率；正在录音则会静默重启采集，约 100ms 静音间隙，几乎无感。';
+
+  @override
+  String get micMuteLabel => '静音（会话保留，关闭手机录音）';
+
+  @override
+  String get micMutedLabel => '已静音 · 点按恢复录音';
+
+  @override
+  String get micMuteHint =>
+      '静音 = 会话仍在册（电脑还看得见这台手机），但手机立刻关闭录音硬件并通知电脑丢弃残留声音；想让电脑彻底唤不起这台手机，请用顶部「禁用」。';
 
   @override
   String get micHowToUse =>
@@ -444,6 +445,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get errCamNoLens => '手机没有对应镜头';
 
   @override
+  String get errCamNoCaps => '读不到这颗镜头支持的画质档位，无法启动摄像头';
+
+  @override
   String get errCamTimeout => '相机打开超时，请关闭其他相机应用重试';
 
   @override
@@ -543,8 +547,4 @@ class AppLocalizationsZh extends AppLocalizations {
   String langAutoCurrent(String locale) {
     return '已识别系统语言：$locale';
   }
-
-  @override
-  String get langHint =>
-      '全球通用词（WiFi、USB、IP、WebSocket、kHz）不翻译。你的选择会记在本机，杀进程重开仍认。';
 }

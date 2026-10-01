@@ -6,10 +6,10 @@
 //   └─ DeviceGate   状态明说块（唯一的否决权入口）
 //   └─ 电平区       状态行 + 电平条 + 码率/采样率/声道
 //   └─ 参数区       采样率二选一（任何状态都可改）
+//   └─ 静音区       保留会话、关闭手机录音（对齐音响静音 / 摄像头冻结）
 //   └─ 提示         电脑那头怎么选录音设备
 //
-// 本轮按用户要求删掉的东西（不要再加回来）：
-//   · "静音"按钮 —— 要临时不出声就去拨顶部滑块禁用，或电脑侧不选这个设备；
+// v3.6 按用户要求删掉的东西（仍然不要加回来）：
 //   · "后台守护"开关 —— 禁用滑块就是唯一的闸；
 //   · 大圆形"启用/停止"按钮 —— 同上。
 // 注意：删的是【开关入口】，不是保活的前台服务本身。前台服务现在常驻，
@@ -19,14 +19,19 @@
 //   AudioRecord 根本没运行 —— 状态栏无录音小绿点、不耗电、一条字节都不上行
 //   （所以下面码率读数就是 0）。常驻的只有前台保活服务和 PC 那条会话登记，
 //   电脑真要用麦克风的那一刻才开硬件 —— 这就是 on-demand（按需）设计。
-// 【产品规则 · 本页为什么没有静音按钮】v3.6 起，"要这台手机麦克风彻底闭嘴"
-//   的唯一否决权入口 = 页首 DeviceGate 那个启用/禁用滑块：拨到禁用 = 注销
-//   会话（发 mic_stop），PC 的会话表里再也没有这台手机，它再怎么"用麦克风"
-//   也送达不了。MicProvider 里其实仍留着 toggleMute() 方法，但本页刻意不给
-//   它做按钮 —— 静音键会造成"是我没在发、还是电脑没在用"的两可状态，
-//   两处开关必有一处骗人，所以只留一处说得清的闸（对照：摄像头页保留了
-//   "冻结"键，因为它的效果如实可见 —— 画面确实停在最后一帧、预览角标也
-//   换成"已冻结"，不会让人猜"到底是电脑没在用还是我没在发"）。
+// 【产品规则 · v3.8 起本页重新有了"静音"按钮】它和页首 DeviceGate 的
+//   启用/禁用滑块是【两把不同的闸】，分工照抄音响与摄像头：
+//     · 静音（本按钮，= 音响的"静音"、摄像头的"冻结画面"）：
+//       会话【保留】在 PC 的会话表里，但手机这边立刻关闭录音硬件
+//       （AudioRecord.stop，状态栏绿点消失），并给 PC 发一条 mic_mute
+//       让它同步丢弃注入、清掉残留尾音；再按一次立即恢复。
+//       典型用法：会议里临时闭嘴，几秒后还要接着说。
+//     · 禁用（页首滑块）：注销会话（发 mic_stop），PC 再也唤不起这台手机。
+//   两把闸并存不会骗人，因为本页把它们放在不同位置、写着不同后果：
+//   静音是"红底 + 已静音 · 点按恢复录音"的临时开关，禁用是"注销会话"
+//   的一次性动作。对照旧的顾虑（"是我没在发、还是电脑没在用"）——
+//   现在按钮自己说明状态，且 mic_state 到来时若处于静音会停在待命不再开麦，
+//   界面与硬件始终一致。
 // 【界面五态的词、各由哪个字段驱动】disabled/offline/pendingConsent/
 //   standby/active 由 DeviceProvider.statusOf 统一翻译（它读 MicProvider 的
 //   isLive/isStandby + ConnectionProvider.isConnected + 总闸开关），出现在
@@ -326,9 +331,45 @@ class MicScreen extends StatelessWidget {
                       ),
                     ),
                   ),
+                  const SizedBox(height: 12),
+
+                  // ============ ④ 静音（临时闭麦，会话保留）============
+                  // 与页首禁用总闸的分工（本页最重要的两把闸，别混）：
+                  //   禁用 = 注销会话（发 mic_stop），PC 下次唤不起这台手机；
+                  //   静音 = 会话【仍在册】，但手机立刻关闭录音硬件，
+                  //         并给 PC 发 mic_mute 让它丢弃注入、清残留尾音。
+                  // 它对齐音响页的"静音"与摄像头页的"冻结画面"这两颗同类按钮：
+                  // 都是"临时停一下，链路别断"，再按一次立刻回来。
+                  // provider.isMuted 决定画哪只按钮：红色填充"已静音"（再按解除）
+                  // / 描边"静音（关闭手机录音）"；两只按钮的 onPressed 都调
+                  // toggleMute() —— 按钮自己不判断"这次是静还是解"，
+                  // 状态只存 provider 一处，界面就不会骗人。
+                  // 只有会话在（非 idle）时才有意义：idle 时硬件本就是关的。
+                  // 外层 SizedBox(height: 48) 是定高约束（与 camera_screen
+                  // 的冻结键同款）：按钮组件倾向撑满给到的空间，钉死 48 更稳。
+                  if (state != MicState.idle) ...[
+                    SizedBox(
+                      height: 48,
+                      child: provider.isMuted
+                          ? FilledButton.icon(
+                              style: FilledButton.styleFrom(
+                                  backgroundColor: Colors.red.shade600),
+                              onPressed: () => provider.toggleMute(),
+                              icon: const Icon(Icons.mic_off),
+                              label: Text(l10n.micMutedLabel),
+                            )
+                          : OutlinedButton.icon(
+                              onPressed: () => provider.toggleMute(),
+                              icon: const Icon(Icons.mic_off_outlined),
+                              label: Text(l10n.micMuteLabel),
+                            ),
+                    ),
+                    // 一句话说明"静音到底关掉了什么"，避免和禁用混淆
+                    ParamHint(text: l10n.micMuteHint),
+                  ],
                   const SizedBox(height: 16),
 
-                  // ============ ④ 使用提示 ============
+                  // ============ ⑤ 使用提示 ============
                   Text(
                     l10n.micHowToUse,
                     textAlign: TextAlign.center,

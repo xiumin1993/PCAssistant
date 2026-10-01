@@ -10,10 +10,12 @@
 // v3.4 核心行为（镜像 v3.3 麦克风的"按需"哲学 + 摄像头特有的双入口）：
 //
 //   【双入口启用】摄像头比麦克风更敏感，不做"连上就自动待命"：
-//     入口 A —— 手机上主动打开"摄像头守护"（本文件 toggle）；
+//     入口 A —— 手机上主动打开"摄像头守护"（本文件 toggle / 总闸 setEnabled）；
 //     入口 B —— PC 端 GUI 点"请求手机开启摄像头"→ 服务器推 cam_request →
-//               手机出现确认横幅，用户点"同意"才登记会话（acceptRequest）。
-//     无论哪个入口，都需要用户一次明确点头 —— 这是隐私底线。
+//               手机【直接】登记会话进待命（v3.8 起不再弹确认横幅）。
+//     v3.8 变更说明：原先入口 B 要求用户在手机上再点一次"同意"，现按产品
+//     要求取消 —— 用户把摄像头总闸拨到"启用"那一刻已经表态过，
+//     不必对同一件事点头两次；真正的否决权仍在总闸（拨"禁用"= 彻底不给用）。
 //
 //   【按需开硬件】登记后进入【待命 standby】：相机硬件是【关】的
 //     （无绿点、不耗电）。PC 上的应用真的打开 Unity Video Capture
@@ -40,20 +42,20 @@
 // 它持有的状态（下面每个字段都有逐条注释）：
 //   _state（四态枚举）/ _enabled（功能总闸）/ _sessionEstablished（PC 登记确认没）
 //   / _serverLive（PC 那边是否真的有人在看）/ _muted（冻结键）
-//   / _requestPending（是否正等用户点"同意"）/ _guardWanted（用户的意图）
+//   / _guardWanted（用户的意图）
 //   / 镜头与画质档位 / 预览帧 / 错误文案键。
 // 谁会调用它（向上，界面层 —— 界面文件由别人负责，这里只给指引）：
 //   · lib/screens/camera_screen.dart —— 摄像头详情页（大按钮、冻结键、切镜头、
 //     画质下拉框、旋转 90°、全屏预览），整页包在 Consumer<CameraProvider> 里；
-//   · lib/screens/home_screen.dart —— 首页"摄像头守护"开关 + PC 请求横幅
-//     （同意→acceptRequest()，忽略→declineRequest()）；
+//   · lib/screens/home_screen.dart —— 首页"摄像头守护"开关
+//     （v3.8 起不再有 PC 请求确认横幅：cam_request 直接进待命）；
 //   · lib/providers/device_provider.dart —— 把三个 Provider 的技术状态翻译成
 //     界面要的五档状态词，并把用户的启用/禁用下发成 setEnabled(bool)。
 // 它调用谁（向下，服务层）：CameraService（原生 Camera2）+ NetworkService（WebSocket）。
 // 与 PC 端的握手顺序（摄像头版，一步步）：
 //   ① 手机连上 WebSocket（连接本身归 ConnectionProvider 管，本类只旁观状态流）
 //   ② connected → ensureCaps() 探画质档位（读相机"静态说明书"，不开硬件）
-//   ③ 用户开守护(toggle)，或 PC 发 cam_request 且用户点同意(acceptRequest)
+//   ③ 用户开守护(toggle)，或 PC 发 cam_request（v3.8 起免确认，直接登记）
 //      → 发 cam_capabilities（能力清单）→ 发 cam_start（登记会话）
 //   ④ PC 回 cam_ack → _sessionEstablished=true → 进 standby（相机依然关着）
 //   ⑤ PC 上的应用真的打开虚拟摄像头 → PC 推 cam_state{active:true}
@@ -106,7 +108,7 @@ import '../l10n/app_localizations.dart';
 //   【idle 未启用】 触发：App 启动、断线、stop()、PC 强制关闭
 //        │         界面：首页开关灰、大字"未启用"，只有"启用"按钮可点
 //        │ 用户拨守护开关(toggle→_enterStandbyInternal)
-//        │ 或 PC 发 cam_request 且用户点同意(acceptRequest)
+//        │ 或 PC 发 cam_request（v3.8 起直接进待命，无需再点同意）
 //        ▼
 //   【starting 登记/开相机中】（瞬时态，通常一闪而过 <0.5 秒）
 //        │         界面："正在开启…"；它同时被借用作"正在向 PC 登记"的过渡态
@@ -131,7 +133,8 @@ import '../l10n/app_localizations.dart';
 //   disabled      已禁用     ← _enabled==false（压倒一切，别的都不看）
 //   offline       未连接     ← ConnectionProvider 说没连着电脑
 //   pendingConsent 待电脑请求 ← 连着电脑但 _state==idle（摄像头特有：
-//                              它【不】自动登记，要 PC 发 cam_request + 用户同意）
+//                              它【不】自动登记，要 PC 发 cam_request
+//                              或用户先在手机上开守护；v3.8 起收到请求即登记）
 //   standby       待命       ← isStandby（_state==standby，硬件关）
 //   active        使用中     ← isLive（_state==live，取景中，词是"取景中"）
 // 对用户分别意味着：
@@ -210,7 +213,9 @@ class CameraProvider extends ChangeNotifier {
   // 隐私设备必须严格区分"现状"和"意图"：现状说关就关，意图也要跟着关，
   // 否则会出现"用户明明关了、重连后相机又悄悄打开"的可怕行为（见 stop()）。
   bool _guardWanted = false;  // 用户意图：想要摄像头守护（断线重连后自动恢复登记）
-  bool _requestPending = false; // 收到 cam_request，等用户点"同意/忽略"
+  // v3.8：这里原本还有一个 _requestPending（"收到 cam_request，等用户点同意"）。
+  // 取消二次确认后它永远不会变 true，连同 acceptRequest()/declineRequest()
+  // 与首页的 _ConsentBanner 一起删除 —— 留着只会让读代码的人以为还有这道关。
   // v3.7 国际化：错误存【文案键】+ 原始细节，不再存中文句子
   // 为什么？Provider 没有 BuildContext，拿不到当前语言；
   // 把"我看到什么错"和"这句话怎么说"分开，界面才能翻译。
@@ -241,16 +246,30 @@ class CameraProvider extends ChangeNotifier {
   List<CamLensCaps> _caps = const []; // 能力探测结果（发给 PC + 本地选档）
   // const [] = 编译期就确定的"空列表常量"，不能往里加东西，
   // 用它当"还没探测到"的初始值最省内存（不用 new 一个空 List）。
-  // 魔数解释：640×480@30 是【兜底默认档】（VGA，约 30 万像素）。
-  // 它是"能力探测失败时"仍能工作的保守选择：分辨率低 → 画面糊，
-  // 但 JPEG 小（约 30~60KB/帧）、编码快、带宽省，不会把 WiFi 挤爆。
-  // 探测成功后 _pickBestProfile() 会把它换成该镜头的最高档。
-  int _selWidth = 640;      // 当前选定的画质档
-  int _selHeight = 480;
-  int _selFps = 30;
-  // 30fps 是【网络场景的封顶值】：再高（如 60fps）帧数翻倍 →
-  // JPEG 总量翻倍 → WiFi 拥塞、延迟上升、手机发热耗电，而虚拟摄像头
-  // 的观看体验提升有限；低于 15fps 则明显卡顿。
+  // ==========================================================================
+  // 【v3.8.3 通则】画质档 / 帧率只能来自手机自己上报的能力清单，代码不许造。
+  // 每台手机的 CMOS + HAL 支持的档位都不一样（有的最高 960×720@30，
+  // 有的是 1920×1080@60，还有的只有 4 档），任何写死的"通用档"在 A 机上是
+  // 浪费、在 B 机上可能根本不支持。所以这里初始值用 0 = 【未知】，
+  // 只有 ensureCaps() 探到真实清单后由 _pickBestProfile() / selectProfile()
+  // 填上真值；填不上就判定 profileKnown == false，绝不开相机。
+  //
+  // 为什么不能给"保险默认值"：一旦给了 640×480@30，探测失败时 App 会【安静地】
+  // 用这个假档去登记会话并打开硬件 —— 用户看到的是"能出画面但很糊"，
+  // 而不是"这台机器报不出能力"。假档会掩盖问题，也违背"跟着设备走"。
+  // ==========================================================================
+  int _selWidth = 0;        // 当前选定的画质档（0 = 还没从手机拿到）
+  int _selHeight = 0;
+  int _selFps = 0;
+
+  /// 当前档位是否【真的来自手机能力清单】。
+  /// false = 探测没完成 / 这台机器的这颗镜头一档都报不出来 → 不许开相机、
+  /// 不许向 PC 登记会话（否则 PC 会按一个凭空编出的分辨率去开虚拟摄像头）。
+  bool get profileKnown => _selWidth > 0 && _selHeight > 0 && _selFps > 0;
+  // v3.8：帧率【不再】人为封顶 30fps。以前 clamp(1, 30) 是写给"省带宽、防发热"
+  // 的老顾虑，结果把本来能跑 60fps 的机也按到 30，用户肉眼可见地卡。
+  // 现在的规则是"跟着设备走"：能力探测报这档最高多少 fps，App 就用多少。
+  // 代价（发热、上行带宽）由用户自己决定 —— 界面下拉框可以随时切回低帧率档。
 
   // ── v3.4.1：手动旋转偏移（0/90/180/270，顺时针，单位：度）──
   // 真正的数字存在原生 CameraEngine 里（每帧压缩时套用）；
@@ -264,13 +283,27 @@ class CameraProvider extends ChangeNotifier {
   // ── 预览 ──
   // Uint8List? 可空：null = 此刻没有画面（未启用/已关相机），界面就画占位图。
   Uint8List? _previewJpeg;  // 最新一帧 JPEG（界面 Image.memory 直接显示）
-  int _lastNotifyMs = 0;    // 预览刷新节流时间戳（10fps 够用）
-  // "节流"（throttle）= 一段时间内只放行一次。这里用"当前毫秒时间戳 -
-  // 上次通知时间戳 ≥ 100"来判断，见接线 1。100ms = 界面最多 10fps。
-  // 为什么不每帧都 notifyListeners()：相机一秒能出 30 帧，
-  // 一帧刷一次 = 一秒重建 30 次界面，手机发烫、画面反而抖；
-  // 预览是给人看的，10fps 已经觉得连贯。改成 1000（1fps）会明显卡顿，
-  // 改成 16（60fps）纯属浪费（屏幕也画不出那么多，且重建成本远大于画图）。
+  int _lastNotifyMs = 0;    // 预览刷新节流时间戳
+
+  /// 【v3.8.4】预览帧的**独立通知通道**，界面只让预览卡订阅它。
+  /// 为什么必须另开一条：相机一秒出 10~30 帧，若每帧都 notifyListeners()，
+  /// 整页 Consumer 会跟着重建同样多次。实测（Redmi 4X，8×A53，960×720）主线程
+  /// （Dart UI）独吃 1.66 核 —— 比 4 条 JPEG 压缩流水线加起来还贵，
+  /// 抢占了本该给采集流水线的核，反过来把相机帧率压到 11fps（背压）。
+  /// 改成"帧只走这条通道"后：帧刷新只重建预览卡那一个 widget，
+  /// 整页仍然只在【状态真的变了】时才重建（那本来就是低频事件）。
+  /// ⚠ 帧刷新请一律用 previewFrame，**不要**改成 notifyListeners()。
+  final ValueNotifier<Uint8List?> previewFrame = ValueNotifier(null);
+  // "节流"（throttle）= 一段时间内只放行一次。间隔由 _previewThrottleMs 决定。
+  // v3.8 之前这里写死 100ms —— 等于把本地预览锁死在 10fps，而相机明明在出 30fps，
+  // 这是"界面看着卡"的最直接原因。现在改为跟随实际帧率（见 _previewThrottleMs）。
+  int _previewThrottleMs = 33;
+  // 预览刷新间隔 = 1000 / 当前帧率，再夹在 [42, 100] 之间（v3.8.3）：
+  //   · 下限 42ms —— 预览最多 ~24fps。曾试过跟帧率走满 30fps，实测低端机
+  //     反而更卡（整页重建 + 解码把 UI 线程挤爆），24fps 已足够连贯；
+  //   · 上限 100ms —— 保底节流，防止相机报了超低帧率时界面却在疯狂重建。
+  //   · 15fps → 66ms（跟随）；30fps → 42ms；60fps → 42ms（封顶生效）。
+  // 每次 _pickBestProfile() / selectProfile() 换档时都会重算这个值。
 
   /// 上行帧魔术头：4 字节 [0x03,'C','A','M']，服务器据此把 JPEG 帧
   /// 与麦克风 PCM 分流（PCM 撞这 4 字节的概率约 2^-32，可忽略）。
@@ -327,10 +360,14 @@ class CameraProvider extends ChangeNotifier {
         final now = DateTime.now().millisecondsSinceEpoch;
         // 取"从 1970-01-01 UTC 起算的毫秒数"，是整数，做减法比 DateTime
         // 对象轻便得多（这个回调一秒可能被叫 30 次，能省则省）。
-        if (now - _lastNotifyMs >= 100) {
-          // 节流：相机每秒最多 30 帧，界面 10fps 刷新足够顺滑
+        // v3.8：节流间隔跟随实际帧率（相机出多少帧，界面就刷多少帧），
+        // 不再是写死的 100ms。相机一秒出 N 帧时每帧都刷 = 一秒重建 N 次界面，
+        // 这个上限由 _previewThrottleMs 的 16ms 下限托底，不会失控。
+        if (now - _lastNotifyMs >= _previewThrottleMs) {
           _lastNotifyMs = now;
-          notifyListeners();
+          // 【v3.8.4】只推给预览卡，不再 notifyListeners() 惊动整页
+          //（理由见 previewFrame 字段注释：整页重建是主线程 1.66 核的元凶）。
+          previewFrame.value = jpeg;
         }
       }
     };
@@ -360,7 +397,6 @@ class CameraProvider extends ChangeNotifier {
         _sessionEstablished = false;
         _serverLive = false;
         _muted = false;
-        _requestPending = false;
         // 只有"确实不在 idle"才去做关闭动作：idle 时没什么可关，
         // 也不该 notifyListeners（否则断线会白白重建一次界面）。
         if (_state != CamState.idle) {
@@ -368,6 +404,7 @@ class CameraProvider extends ChangeNotifier {
           _cameraService.stopGuardService();
           _state = CamState.idle;
           _previewJpeg = null;
+          previewFrame.value = null; // 预览卡也要跟着清掉最后一帧旧画面
           notifyListeners();
         }
       }
@@ -429,23 +466,49 @@ class CameraProvider extends ChangeNotifier {
     });
     // ⚠ 注意：这条订阅的返回值没有保存（见字段区的说明），dispose 时无法 cancel。
 
-    // 【接线 5：PC 请求启用 → 亮出确认横幅，等用户点"同意"】
+    // 【接线 5：PC 请求启用 → 直接进待命（v3.8：取消二次确认）】
     // 协议：PC GUI 上点"请求手机开启摄像头" → 推 {"type":"cam_request"}
     // （没有 payload 字段，所以 camRequestStream 的类型是 Stream<void>，
     //  参数写成 (_) 因为压根没有值可看）。
-    // 这是隐私底线：手机【绝不】替用户点头，必须用户在屏幕上按一次。
-    _requestSubscription = _networkService.camRequestStream.listen((_) {
-      // 第一道闸：没连着就别弹横幅（点了也无法登记，只会误导用户）
+    //
+    // 【v3.8 行为变更（应产品要求）】旧行为：置 _requestPending = true →
+    // 首页弹"同意/忽略"横幅 → 用户点"同意"(acceptRequest) 才登记会话。
+    // 新行为：PC 一发请求就【直接】登记。理由 ——
+    //   1) 用户已经在手机上把摄像头总闸拨到"启用"（DeviceGate，键
+    //      device_enabled_camera 持久化），那一次拨动本身就是他的授权；
+    //      再让他对同一件事点第二次头，等于同一件事问两遍。
+    //   2) 横幅是"等用户来处理"的异步界面，用户不在手机前时请求会一直挂着，
+    //      PC 端看到的是"点了请求但手机没反应"，看起来像故障。
+    // 仍保留的三道闸（一道不少，只是不再多问一句）：
+    //   ① 没连上 → 不动；② 总闸关着 → 不动；③ 已在守护中 → 幂等不动。
+    // 另外相机权限检查从"横幅的同意按钮"搬到了这里（见下方注释），
+    // 免得登记出一条永远开不了硬件的会话。
+    // 真正的否决权依然在总闸：想彻底不给用，去摄像头详情页拨"禁用"。
+    _requestSubscription = _networkService.camRequestStream.listen((_) async {
+      // 第一道闸：没连着就别登记（登记帧没人收，白做一次）
       if (!_networkService.isConnected) return;
       // 下面这条判断就是"闸门第一道保险"：PC 的唤醒意图在入口就被拦掉，
-      // 连"打扰用户"这件事都不发生 —— 用户才有真正的否决权。
-      if (!_enabled) return; // v3.6：设备已禁用 → 连横幅都不弹，闸门说了算
-      if (_state != CamState.idle) return; // 已在守护中，无需再确认
-      _requestPending = true;
-      _setError(null);
-      notifyListeners();
-      // 横幅画在哪：参见 lib/screens/home_screen.dart 里读 cam.requestPending
-      // 的那段（true 才渲染，"同意"→acceptRequest()，"忽略"→declineRequest()）。
+      // 禁用态下连一丝反应都没有 —— 用户才有真正的否决权。
+      if (!_enabled) return; // v3.6：设备已禁用 → 闸门说了算，不进待命
+      if (_state != CamState.idle) return; // 已在守护中，幂等退出
+      // v3.8：横幅上那次"同意"被取消后，【权限检查必须自己补上】——
+      // 原来它由 acceptRequest() 负责（用户点头后顺带弹系统授权窗）。
+      // 不补会怎样：会话照样登记成功，但真到 _openCamera() 那一刻
+      // 才被原生以 PERMISSION_DENIED 拒绝 —— 用户看到的是"登记了却开不了"。
+      // ensurePermission() 内部先静默查一次，只有确实没授权才弹系统窗；
+      // 此刻弹是合理的：总闸已被用户拨到"启用"，PC 又明确请求了，
+      // 属于 Android 认可的"用到之前才问"，不像"刚连上就问"那样突袭。
+      if (!await _cameraService.ensurePermission()) {
+        _needsPermission = true; // 相机页会亮出琥珀横幅 + "授权"按钮
+        _setError('errCamPermission');
+        notifyListeners();
+        return;
+      }
+      _needsPermission = false;
+      _guardWanted = true; // 记住意图：这是"已授权"的等价物，断线重连自动恢复
+      // 不 await：登记过程内部自己 notifyListeners，界面会跟着走。
+      // 走的是和 toggle() 同一个终点 —— 检查不被绕过（见 _enterStandbyInternal）。
+      _enterStandbyInternal();
     });
     // ⚠ 注意：这里 3 个 early-return 都没有留日志，PC 端点了请求但手机
     // 悄无声息时，排查只能靠推理（是没连？被禁用？还是已在待命？）。
@@ -460,7 +523,6 @@ class CameraProvider extends ChangeNotifier {
       // 已经彻底空闲（没会话、也没意图）就没什么可关的，避免重复通知
       if (_state == CamState.idle && !_guardWanted) return;
       _guardWanted = false;
-      _requestPending = false;
       stop(silent: true);
       _setError('camForceStopped');
       notifyListeners();
@@ -494,7 +556,6 @@ class CameraProvider extends ChangeNotifier {
   bool get serverLive => _serverLive;
   bool get needsPermission => _needsPermission;
   bool get hasSession => _sessionEstablished;
-  bool get requestPending => _requestPending;
   bool get guardWanted => _guardWanted;
   /// 记录/清除一条错误。只存文案键（+ 可选细节），句子由界面翻译。
   // 语法点：参数包在 [] 里 = 【可选位置参数】，调用时可以省略：
@@ -529,6 +590,8 @@ class CameraProvider extends ChangeNotifier {
       'errCamNoLens' => l10n.errCamNoLens,
       'errCamTimeout' => l10n.errCamTimeout,
       'errCamBusy' => l10n.errCamBusy,
+      // v3.8.3：手机报不出可用档位（能力探测空 / 该镜头一档都没有）
+      'errCamNoCaps' => l10n.errCamNoCaps,
       'errCamStart' => l10n.errCamStart(_errorDetail ?? ''),
       // ?? 是"空合并"：左边是 null 就用右边兜底。
       // _errorDetail 是 String?，而 l10n.errCamStart 要求传非空 String，
@@ -562,7 +625,10 @@ class CameraProvider extends ChangeNotifier {
   // 字符串插值：'$_selWidth' 会把变量值嵌进字符串；
   // 需要更复杂的表达式或紧跟字母时必须用 ${} 包起来 ——
   // ${_selFps}fps 里那个 {} 就是在跟后面的 'f' 抢边界（不包就解析不了）。
-  String get qualityText => '$_selWidth×$_selHeight @ ${_selFps}fps';
+  // 档位未知时返回占位串（界面只在 live 状态才显示它，live 就一定是已知档，
+  // 这里只是防止 0×0 @ 0fps 这种"代码造出来的数字"出现在任何角落）。
+  String get qualityText =>
+      profileKnown ? '$_selWidth×$_selHeight @ ${_selFps}fps' : '--';
 
   /// v3.4.1：当前手动旋转角度（0/90/180/270）
   int get manualRotation => _manualRotation;
@@ -629,11 +695,12 @@ class CameraProvider extends ChangeNotifier {
   }
 
   // --------------------------------------------------------------------------
-  // 启用路径（两个入口汇到同一个 _enterStandbyInternal）
+  // 启用路径（三个入口汇到同一个 _enterStandbyInternal）
   // --------------------------------------------------------------------------
-  // "两条路、一个门"：用户在手机上开开关(toggle) 和 用户点"同意"(acceptRequest)
-  // 是【两个不同的入口】，但都必须走完整同样的三步检查（连接？权限？闸门？），
-  // 所以真正登记的动作只留一份实现（_enterStandbyInternal），避免两条路走偏。
+  // "三条路、一个门"：用户在手机上开开关(toggle)、PC 发 cam_request（接线 5，
+  // v3.8 起直接登记，不再弹确认）、以及总闸拨回启用(setEnabled)
+  // 是【三个不同的入口】，但都必须走完整同样的检查（连接？权限？闸门？），
+  // 所以真正登记的动作只留一份实现（_enterStandbyInternal），避免几条路走偏。
 
   /// v3.6：功能总闸（与 MicProvider.setEnabled 同一套语义）。
   /// 关掉 = 注销会话 + 关相机 + 撤守护（电脑那边再也唤不起）；
@@ -656,13 +723,15 @@ class CameraProvider extends ChangeNotifier {
     }
     // 注意这个 else-if：拨到"启用"但【还没连电脑】时什么都不做 ——
     // 等接线 2 收到 connected 时，会因为 _guardWanted=false 也不自动登记
-    // （摄像头要求人工同意）。这是有意为之，不是漏写。
+    // （摄像头不像麦克风那样"连上就待命"：要么用户先开守护，
+    //  要么 PC 发 cam_request）。这是有意为之，不是漏写。
     notifyListeners();
   }
   // ⚠ 注意两点（都不改代码，只登记行为）：
-  // 1) _guardWanted = true 写在这个分支里，意味着"用户拨总闸到启用"本身
-  //    被当成了对摄像头的同意（它确实是用户在手机上主动做的操作）。
-  //    这和"必须再明确点一次头"的隐私底线有一点张力，要不要额外再问一次由你定。
+  // 1) _guardWanted = true 写在这个分支里，意味着"用户拨总闸到启用"被当成
+  //    了对摄像头的同意（它确实是用户在手机上主动做的操作）。
+  //    v3.8 之后这条与 PC 的 cam_request 口径一致了：都是"用户已经表态过
+  //    → 直接进待命"，不再有"拨了启用还得再点一次同意"的双层确认。
   // 2) PC 强制关闭时接线 6 把 _guardWanted 清了，但 _enabled 仍是 true。
   //    于是页首闸门看着还是"启用"，用户再拨一次也走不到这里（第一行
   //    `if (_enabled == on) return` 就退出了），想恢复只能去点首页守护开关。
@@ -706,37 +775,11 @@ class CameraProvider extends ChangeNotifier {
   // 但真被绕过时这里的检查顺序是：连接 → 权限 → 进 _enterStandbyInternal
   // 才被闸门拦下。副作用是"可能弹一次系统权限窗但什么也没登记"。
 
-  /// PC 请求横幅上的"同意"按钮
-  // 这是隐私底线的落地点：cam_request 只是"PC 的意愿"，
-  // 只有用户在屏幕上按了这个按钮，手机才真的去登记会话。
-  Future<void> acceptRequest() async {
-    // 先把横幅收起来：不管后面登记成功还是失败，这条请求都已经"被处理过了"
-    _requestPending = false;
-    if (!_networkService.isConnected) {
-      _setError('errConnectFirst');
-      notifyListeners();
-      return;
-    }
-    if (!await _cameraService.ensurePermission()) {
-      _needsPermission = true;
-      _setError('errCamPermission');
-      notifyListeners();
-      return;
-    }
-    _needsPermission = false;
-    _guardWanted = true;
-    await _enterStandbyInternal();
-  }
-
-  /// PC 请求横幅上的"忽略"按钮（不注销、不报错，静默收起）
-  // 语义上是"用户没表态"，所以既不置 _guardWanted 也不写错误：
-  // PC 端看到的仍是"这台手机没登记会话"，下次还能再请求。
-  // 这个方法不是 async：它没有任何要等的东西（Future），
-  // 只改一个布尔然后通知界面 —— 用 Future 反而会让调用方多写 await。
-  void declineRequest() {
-    _requestPending = false;
-    notifyListeners();
-  }
+  // v3.8：这里原本还有 acceptRequest() / declineRequest() 两个方法
+  //（PC 请求横幅上的"同意 / 忽略"）。二次确认取消后：
+  //   · "同意"要做的事已被接线 5 直接做完（_guardWanted = true + 进待命）；
+  //   · "忽略"这个动作不再存在 —— 想不给用就去拨总闸到"禁用"。
+  // 两者连同首页横幅一起删除，不留"看起来还能拒绝"的死入口。
 
   /// v3.4.13：能力探测（幂等 + 缓存）。
   ///
@@ -769,7 +812,10 @@ class CameraProvider extends ChangeNotifier {
       _pickBestProfile(); // 按当前镜头挑最高档
       notifyListeners(); // 档位表到了 → 下拉框该刷新
     } catch (_) {
-      _capsReady = false; // 探失败留个机会下次再探（不致命：有保守默认档）
+      // 探失败：留个机会下次再探（比如下次进待命时）。
+      // 注意这里【不编档位】—— _selWidth/Height/Fps 保持 0，
+      // profileKnown 为 false，开相机的入口会拦下来并给用户明确提示。
+      _capsReady = false;
     }
   }
   // ⚠ 注意：失败时只把 _capsReady 复原，没有记 _errorKey 也没有 debugPrint。
@@ -777,7 +823,8 @@ class CameraProvider extends ChangeNotifier {
 
   /// 进入待命：能力探测 → 挂守护通知 → 向服务器报能力 + 登记会话。
   /// 注意这里【不】打开相机硬件 —— 那是 cam_state 信号的事。
-  // 这是两条启用入口（toggle / acceptRequest）共同的终点，私有方法（带 _）：
+  // 这是启用入口（toggle / setEnabled / 接线 5 的 cam_request）共同的终点，
+  // 私有方法（带 _）：
   // 界面不许直接调它，必须走那两个公开入口 —— 保证检查不被绕过。
   Future<void> _enterStandbyInternal() async {
     if (_state != CamState.idle) return; // 幂等
@@ -792,8 +839,20 @@ class CameraProvider extends ChangeNotifier {
     notifyListeners();
 
     // 第一步：确保能力清单已探出（连上时通常已经探过，这里幂等兜底）。
-    // 探测失败不致命：用保守默认 640×480@30 继续。
     await ensureCaps();
+
+    // 【v3.8.3】探不到档位 = 这台手机的这颗镜头没告诉我们它支持什么。
+    // 此时【绝不】用代码编一个档位去登记 / 开硬件：
+    //   · 编的分辨率 PC 端不知道真假，虚拟摄像头会按错的尺寸初始化；
+    //   · 原生拿一个设备不支持的尺寸去 openCamera 会直接 SESSION_FAILED；
+    //   · 更糟的是"能出画面但糊得莫名其妙"，用户完全无从判断原因。
+    // 所以这里停下来，把状态退回 idle 并给用户一条明确提示。
+    if (!profileKnown) {
+      _setError('errCamNoCaps');
+      _state = CamState.idle;
+      notifyListeners();
+      return;
+    }
 
     // 第二步：守护前台服务（息屏不被杀，PC 唤醒指令才能送达）
     // Android 为了省电会杀后台进程；前台服务 = 挂一条常驻通知，
@@ -840,11 +899,10 @@ class CameraProvider extends ChangeNotifier {
   // （后果见接线 3 的说明）。要不要加 ack 超时由你定，代码未改。
 
   /// 从能力清单里给当前镜头挑"最高档"：
-  /// 面积最大的一档；帧率取 min(该档最高帧率, 30) —— 网络场景 30fps 封顶。
+  /// 面积最大的一档，帧率取该档的【最高帧率】。
   /// v3.4.4：手动模式下如果手动档在新镜头上也受支持，就保持手动档不动。
-  // clamp(1, 30) 是 num 的方法：把值夹在 1 和 30 之间（太小/太大都会被拉回边界）。
-  // 为什么上限取 30：见 _selFps 字段处的说明（带宽与发热）。下限取 1 是防止
-  // 某些奇葩镜头报出 maxFps=0 时算出 0fps（原生会直接不出帧）。
+  // v3.8：clamp 的上限从 30 拿掉 —— 不再替设备做主。
+  // 下限保留 1：某些镜头会报出 maxFps=0，传 0 给原生会导致相机直接不出帧。
   void _pickBestProfile() {
     // 手动画质优先：用户手动指定过（_autoProfile=false）且这个档在【当前镜头】
     // 上也存在，就别替他改主意。（切镜头时前后置能力常常不同，才需要判一下）
@@ -856,14 +914,47 @@ class CameraProvider extends ChangeNotifier {
     for (final c in _caps) {
       if (c.facing == _facing) lens = c;
     }
-    if (lens == null || lens.sizes.isEmpty) return; // 保持默认 640×480
-    final best = lens.sizes.first; // 原生已按面积从大到小排好
-    // .first 是 List 的属性（第 0 个）。列表为空时它会【抛异常】，
-    // 所以上一行必须先判 isEmpty —— 这是新手常踩的坑。
+    // 【v3.8.3】这里【不回退到任何写死的档位】：探不到就保持 0（未知），
+    // profileKnown 会是 false，开相机的入口会拦下。给"保险默认值"的代价是
+    // 在用户不知情的情况下用一个设备可能根本不支持的尺寸去开硬件。
+    if (lens == null || lens.sizes.isEmpty) return;
+    // 挑"最高档"：先比面积，面积相同再比帧率（例如 1280×720 与 720×1280 面积
+    // 一样，取帧率高的那个）。两条依据都来自手机上报的 maxFps，代码不编。
+    var best = lens.sizes.first;
+    for (final s in lens.sizes) {
+      final bigger = s.width * s.height > best.width * best.height;
+      final sameButFaster = s.width * s.height == best.width * best.height &&
+          s.maxFps > best.maxFps;
+      if (bigger || sameButFaster) best = s;
+    }
     _selWidth = best.width;
     _selHeight = best.height;
-    _selFps = best.maxFps.clamp(1, 30);
+    // clamp 只挡"设备报了 0fps 这种非法值"（传 0 给原生会导致相机不出帧），
+    // 上限 240 是防 HAL 把某个异常大的数报出来，不干涉正常设备。
+    _selFps = best.maxFps.clamp(1, 240);
+    _syncPreviewThrottle();
     _autoProfile = true; // 手动档在当前镜头上不存在 → 回退自动
+  }
+
+  /// 预览刷新间隔 = 1000 / 当前帧率，结果夹在 [42, 100]（≈24fps 封顶）。
+  /// 每次换档后跟着算一遍，保证"界面刷新节奏"永远不超过"相机出帧节奏"。
+  // ~/ 是 Dart 的整数除（商向下取整，直接丢掉小数），用来避免 double。
+  void _syncPreviewThrottle() {
+    // 档位未知时用 33ms（≈30fps）—— 这只是【界面重建节奏】，不影响相机档位，
+    // 也不是给设备编帧率：相机没起来时本来也没有帧可刷。
+    if (!profileKnown) {
+      _previewThrottleMs = 33;
+      return;
+    }
+    // 上限夹在 [42, 100]（≈24fps 封顶）：
+    //   · 42ms —— 预览刷新上限约 24fps。以前跟着帧率走到 30fps 后实测反而更卡：
+    //     每次刷新是【整页 Consumer 重建】+ 一张 JPEG 解码，30fps 时低端机的
+    //     UI 线程被 4 路压缩流水线挤占，重建排不上队。24fps 人眼已经很连贯
+    //     （电影就是 24fps），把省下的算力还给流水线（保上行帧率）。
+    //   · 100ms —— 保底节流，防止相机报了超低帧率时界面却在疯狂重建。
+    //   · 15fps → 66ms（跟随）；30fps → 42ms；60fps → 42ms（封顶生效）。
+    // 每次换档后都会重算，保证"界面刷新节奏"永远不超过"相机出帧节奏"。
+    _previewThrottleMs = (1000 ~/ _selFps).clamp(42, 100);
   }
 
   // ── v3.4.4 手动画质档 ──────────────────────────────────────────
@@ -903,7 +994,7 @@ class CameraProvider extends ChangeNotifier {
     return false;
   }
 
-  /// 用户手动选择某一档：帧率自动取该档上限（封顶 30fps）
+  /// 用户手动选择某一档：帧率自动取该档上限（v3.8 起不再封顶 30fps）
   Future<void> selectProfile(CamSizeCaps size) async {
     if (_selWidth == size.width && _selHeight == size.height && !_autoProfile) {
       return; // 没变化，不折腾相机
@@ -911,7 +1002,8 @@ class CameraProvider extends ChangeNotifier {
     _autoProfile = false;
     _selWidth = size.width;
     _selHeight = size.height;
-    _selFps = size.maxFps.clamp(1, 30);
+    _selFps = size.maxFps.clamp(1, 240); // 只挡非法值，不挡高帧率
+    _syncPreviewThrottle();
     await _applyProfileChange();
   }
 
@@ -931,6 +1023,9 @@ class CameraProvider extends ChangeNotifier {
   // 结尾一次把"相机真的重启完了"的最终状态铺给界面（中间是耗时操作）。
   Future<void> _applyProfileChange() async {
     notifyListeners();
+    // 【v3.8.3】档位未知时不许拿 0×0@0 去开相机 / 登记会话。
+    // 正常流程到不了这里（进待命时已经拦过一道），这里是防"以后有人新增调用点"。
+    if (!profileKnown) return;
     if (_state == CamState.live) {
       // 取景中换档：唯一办法是 stop → start（Camera2 换流必须重建 session）。
       // 用户会看到画面黑一下约 0.1~0.5 秒，这是硬件限制，不是 bug。
@@ -972,6 +1067,14 @@ class CameraProvider extends ChangeNotifier {
     // 防止 cam_state 连来两次 true 时开两次相机（原生会报 SESSION_FAILED）。
     if (_state == CamState.live || _state == CamState.starting) return;
     if (!_enabled) return; // v3.6：双保险 —— 禁用状态下绝不开硬件
+    // 【v3.8.3】档位未知 = 手机没告诉我们它支持什么 → 不开硬件。
+    // （正常路径在进待命时已拦过；这里是"入口 + 执行"双保险的执行侧。）
+    if (!profileKnown) {
+      _setError('errCamNoCaps');
+      _state = CamState.standby;
+      notifyListeners();
+      return;
+    }
     _state = CamState.starting;
     notifyListeners();
 
@@ -1043,6 +1146,14 @@ class CameraProvider extends ChangeNotifier {
     if (newFacing != _facing) {
       _facing = newFacing;
       _pickBestProfile(); // 前后置能力可能不同，重挑档位
+      // 【v3.8.3】新镜头报不出档位（极少见，比如外挂镜头）：就此停下，
+      // 不拿"上一颗镜头的档"或代码编的默认值去重建 session。
+      if (!profileKnown) {
+        _setError('errCamNoCaps');
+        _state = CamState.standby;
+        notifyListeners();
+        return;
+      }
       // 档位变了但相机已开着：重启一次以套用新镜头的最佳画质
       await _cameraService.stop();
       final error = await _cameraService.start(
@@ -1119,13 +1230,12 @@ class CameraProvider extends ChangeNotifier {
     // 见 network_service.dart 的解析分支，两个方向共用同一个 type 靠字段区分。
     await _cameraService.stop();
     await _cameraService.stopGuardService();
-    // 下面这一段是"回到出厂账面"：六个字段逐一清回初始值。
-    // 为什么连 _muted / _requestPending 也要清：下次用户重新启用时，
-    // 应当是全新一次开始，不能带着上次的冻结/待确认残留。
+    // 下面这一段是"回到出厂账面"：五个字段逐一清回初始值。
+    // 为什么连 _muted 也要清：下次用户重新启用时，应当是全新一次开始，
+    // 不能带着上次的冻结残留（他会以为还是活的，其实画面停着）。
     _sessionEstablished = false;
     _serverLive = false;
     _muted = false;
-    _requestPending = false;
     _state = CamState.idle;
     _previewJpeg = null;
     notifyListeners();
@@ -1146,6 +1256,10 @@ class CameraProvider extends ChangeNotifier {
         _setError('errCamDenied');
       case 'NO_CAMERA':
         _setError('errCamNoLens');
+      // v3.8.3：上层没从手机探到档位就调开相机（尺寸/帧率为 0）→
+      // 原生拒绝执行。映射到"读不到档位"这条提示，而不是笼统的启动失败。
+      case 'BAD_SIZE':
+        _setError('errCamNoCaps');
       case 'OPEN_TIMEOUT':
         _setError('errCamTimeout');
       case 'SESSION_FAILED':
@@ -1171,6 +1285,7 @@ class CameraProvider extends ChangeNotifier {
     _forceStopSubscription?.cancel();
     // _cameraService.dispose() 内部就是 stop() + stopGuardService()
     _cameraService.dispose();
+    previewFrame.dispose(); // 独立预览通道也要关，否则热重载后会残留监听
     super.dispose();
   }
   // ⚠ 注意：本类实际有 5 条订阅，这里只取消了 4 条 ——

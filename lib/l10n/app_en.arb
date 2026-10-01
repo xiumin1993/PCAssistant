@@ -39,9 +39,6 @@
   "errEnterAddress": "Please enter the PC server address",
   "errEnterPort": "Please enter the port number",
 
-  "consentTitle": "The PC wants to use your camera",
-  "consentIgnore": "Ignore",
-  "consentAgree": "Allow",
 
   "devSpeaker": "Speaker",
   "devMic": "Microphone",
@@ -78,7 +75,7 @@
 
   "detailDisabled": "Disabled · the PC cannot use it",
   "detailOffline": "Goes to standby automatically once the PC is connected",
-  "detailPendingCam": "Connected · the camera starts after the PC asks and you confirm",
+  "detailPendingCam": "Connected - the camera starts automatically once the PC asks",
   "detailPendingMic": "Connected · waiting for recording permission on the phone",
   "detailStandby": "On standby · hardware off, no battery drain",
   "detailActiveSpeaker": "Playing the audio the PC sends",
@@ -111,6 +108,9 @@
   "micRate48": "48 kHz · pass-through",
   "micRate44": "44.1 kHz · resampled on PC",
   "micParamHint": "Changing the profile while on standby takes effect at once: the app re-sends the registration (mic_start) so the server learns the new rate. While recording, capture restarts silently with a gap of about 100 ms you barely notice.",
+  "micMuteLabel": "Mute (session kept, phone mic off)",
+  "micMutedLabel": "Muted · tap to resume recording",
+  "micMuteHint": "Mute keeps the session registered (the PC can still see this phone) but closes the recording hardware at once and tells the PC to drop the leftover audio. To make the PC unable to wake this phone at all, use \"Disabled\" at the top.",
   "micHowToUse": "In the meeting / voice-input app on the PC, set the input device to\n\"CABLE Output (VB-Audio Virtual Cable)\"\n(once connected the phone is on standby; the mic turns ON only when a PC app uses it,\nand OFF the instant that app lets go)",
 
   "micStatusDisabled": "Disabled — the PC cannot use the phone microphone",
@@ -208,6 +208,7 @@
   },
   "errCamDenied": "Camera permission denied — allow it in System Settings",
   "errCamNoLens": "This phone has no such lens",
+  "errCamNoCaps": "Cannot read the resolutions this lens supports — camera cannot start",
   "errCamTimeout": "Opening the camera timed out — close other camera apps and retry",
   "errCamBusy": "The camera is held by another app — close it and retry",
   "errCamStart": "Camera failed to start: {code}",
@@ -283,6 +284,5 @@
         "type": "String"
       }
     }
-  },
-  "langHint": "Globally common words (WiFi, USB, IP, WebSocket, kHz) are not translated. Your choice is remembered on this phone."
+  }
 }

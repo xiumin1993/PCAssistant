@@ -39,9 +39,6 @@
   "errEnterAddress": "请输入服务器地址",
   "errEnterPort": "请输入端口号",
 
-  "consentTitle": "电脑请求使用你的摄像头",
-  "consentIgnore": "忽略",
-  "consentAgree": "同意",
 
   "devSpeaker": "音响",
   "devMic": "麦克风",
@@ -78,7 +75,7 @@
 
   "detailDisabled": "已禁用 · 电脑无法使用",
   "detailOffline": "连接电脑后自动进入待命",
-  "detailPendingCam": "已连接 · 电脑请求后手机确认即取景",
+  "detailPendingCam": "已连接 · 电脑请求后自动取景",
   "detailPendingMic": "已连接 · 等待在手机上授权录音",
   "detailStandby": "待命中 · 硬件已关闭，不耗电",
   "detailActiveSpeaker": "正在播放电脑推来的声音",
@@ -111,6 +108,9 @@
   "micRate48": "48 kHz · 直通",
   "micRate44": "44.1 kHz · PC 重采样",
   "micParamHint": "待命中改档位即刻生效：重发一次登记（mic_start）让服务器知道新速率；正在录音则会静默重启采集，约 100ms 静音间隙，几乎无感。",
+  "micMuteLabel": "静音（会话保留，关闭手机录音）",
+  "micMutedLabel": "已静音 · 点按恢复录音",
+  "micMuteHint": "静音 = 会话仍在册（电脑还看得见这台手机），但手机立刻关闭录音硬件并通知电脑丢弃残留声音；想让电脑彻底唤不起这台手机，请用顶部「禁用」。",
   "micHowToUse": "电脑上的会议 / 语音输入软件，把输入设备选为\n\"CABLE Output (VB-Audio Virtual Cable)\" 即可\n（连上电脑后手机自动待命；电脑一用麦克风手机才开录，\n电脑停用后手机立刻停止录音）",
 
   "micStatusDisabled": "已禁用 —— 电脑无法使用手机麦克风",
@@ -208,6 +208,7 @@
   },
   "errCamDenied": "相机权限被拒绝，请在系统设置中允许",
   "errCamNoLens": "手机没有对应镜头",
+  "errCamNoCaps": "读不到这颗镜头支持的画质档位，无法启动摄像头",
   "errCamTimeout": "相机打开超时，请关闭其他相机应用重试",
   "errCamBusy": "相机被其他应用占用，关闭后重试",
   "errCamStart": "相机启动失败: {code}",
@@ -283,6 +284,5 @@
         "type": "String"
       }
     }
-  },
-  "langHint": "全球通用词（WiFi、USB、IP、WebSocket、kHz）不翻译。你的选择会记在本机，杀进程重开仍认。"
+  }
 }

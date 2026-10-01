@@ -154,18 +154,6 @@ class _LanguageSheet extends StatelessWidget {
                   Navigator.of(context).pop();
                 },
               ),
-
-            const SizedBox(height: 4),
-            // 底部脚注：说明"通用缩写不翻译"这件事，
-            // 免得英语用户看到界面上还有 WiFi/USB 以为是漏翻。
-            Text(
-              l10n.langHint,
-              style: TextStyle(
-                fontSize: 11,
-                height: 1.5,
-                color: Theme.of(context).colorScheme.outline,
-              ),
-            ),
           ],
         ),
       ),
