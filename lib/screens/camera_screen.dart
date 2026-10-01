@@ -435,11 +435,78 @@ class CameraScreen extends StatelessWidget {
 /// 预览解码宽度（物理像素）＝ 取景窗逻辑宽 × 设备像素比，夹在 [160, 1920]。
 /// 宽度拿不到（布局异常）返回 null，让解码器按原始尺寸兜底 —— 宁可多花一点，
 /// 也不要解码出一张 0 宽的废图。
-int? _previewDecodeWidth(BuildContext context, BoxConstraints box) {
-  final w = box.maxWidth;
+///
+/// 【v3.10】quarter 为奇数（转 90°/270°）时，图的"宽"这一轴在旋转后落在屏幕上
+/// 的【高】这一轴上，所以要按 box.maxHeight 算，否则会按错轴解出偏大的图。
+int? _previewDecodeWidth(
+    BuildContext context, BoxConstraints box, int quarter) {
+  final w = (quarter % 2 == 1) ? box.maxHeight : box.maxWidth;
   if (!w.isFinite || w <= 0) return null;
   final dpr = MediaQuery.of(context).devicePixelRatio;
   return (w * dpr).round().clamp(160, 1920).toInt();
+}
+
+// ============================================================================
+// 【v3.10】帧载荷的方向标记 —— 旋转从手机搬走了，但"怎么摆正"还得告诉两端
+// ----------------------------------------------------------------------------
+// 原生（CameraEngine.withOrientTag）在 JPEG 前面加了 1 个字节：
+//   bit0~1 = 需要【顺时针】转几个 90°（0~3）
+//   bit2   = 1 表示还要水平镜像（前置镜头自拍视角）
+// 手机这边不再做像素重排（那一步实测 27~28ms/帧），改用 RotatedBox + Transform
+// 交给 GPU 合成 —— 在渲染树里转一张纹理是免费的，比在 CPU 上搬 69 万像素便宜
+// 几个数量级。PC 端则在解码成 RGBA 后自己转（见 AudioServer src/vcam.rs）。
+// ============================================================================
+int _orientFlags(Uint8List frame) => frame.isEmpty ? 0 : frame[0];
+int _quarterTurns(Uint8List frame) => _orientFlags(frame) & 0x3;
+bool _needsMirror(Uint8List frame) => (_orientFlags(frame) & 0x4) != 0;
+
+/// 跳过方向标记字节，取真正的 JPEG。
+/// sublistView 返回的是【视图】而不是副本 —— 每帧几十 KB 不产生额外拷贝。
+Uint8List _jpegView(Uint8List frame) => Uint8List.sublistView(frame, 1);
+
+/// 一帧画面（带方向标记）→ 摆正后的图片。预览卡与全屏页共用。
+class _OrientedFrame extends StatelessWidget {
+  final Uint8List frame;
+  final BoxFit fit;
+  final int? cacheWidth;
+
+  const _OrientedFrame({
+    required this.frame,
+    required this.fit,
+    this.cacheWidth,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // 防御：帧里至少得有"标记字节 + 一点 JPEG"。空包（原生编码失败的占位帧）
+    // 直接不画 —— 免得 sublistView 越界把整页打成红屏。
+    if (frame.length <= 1) return const SizedBox.shrink();
+    final quarter = _quarterTurns(frame);
+    // 旋转后的图（RotatedBox 已经把它转正），再水平镜像。
+    // ⚠ 顺序不能反：镜像必须作用在【转正之后】的画面上（和原生原先的
+    // orientInto 语义一致）。若把 Transform 放在里面，90° 时会变成垂直翻转，
+    // 画面上下颠倒 —— 因为 H∘R ≠ R∘H（旋转 90° 后再横翻 == 先竖翻再旋转）。
+    final rotated = RotatedBox(
+      quarterTurns: quarter,
+      child: Image.memory(
+        _jpegView(frame),
+        fit: fit,
+        gaplessPlayback: true,
+        // 低质量采样：预览缩放用双线性就够了，
+        // 默认的中/高质量在低端机上光栅成本明显更高。
+        filterQuality: FilterQuality.low,
+        // 【按显示尺寸解码】（v3.8.3）：整张 JPEG 每帧全尺寸解码再缩小
+        // 显示，是"帧率提上去后预览变卡"的大头。
+        cacheWidth: cacheWidth,
+      ),
+    );
+    if (!_needsMirror(frame)) return rotated;
+    return Transform(
+      alignment: Alignment.center,
+      transform: Matrix4.diagonal3Values(-1.0, 1.0, 1.0),
+      child: rotated,
+    );
+  }
 }
 
 class _PreviewCard extends StatelessWidget {
@@ -520,18 +587,14 @@ class _PreviewCard extends StatelessWidget {
                         // LayoutBuilder：量出取景窗的【实际逻辑宽】，交给下面的
                         // cacheWidth 换算成物理像素 —— 解码尺寸跟着显示尺寸走。
                         : LayoutBuilder(
-                            builder: (context, box) => Image.memory(
-                              previewJpeg!,
+                            // 【v3.10】画面交给 _OrientedFrame：跳过方向标记字节，
+                            // 用 RotatedBox/Transform 在 GPU 上摆正（手机不再做
+                            // 逐像素旋转）。cacheWidth 按"旋转后落在哪条轴"来算。
+                            builder: (context, box) => _OrientedFrame(
+                              frame: previewJpeg!,
                               fit: BoxFit.contain,
-                              gaplessPlayback: true,
-                              // 低质量采样：预览缩放用双线性就够了，
-                              // 默认的中/高质量在低端机上光栅成本明显更高。
-                              filterQuality: FilterQuality.low,
-                              // 【按显示尺寸解码】（v3.8.3）：整张 JPEG 每帧
-                              // 全尺寸解码再缩小显示，是"帧率提上去后预览变卡"
-                              // 的大头。cacheWidth 让解码器直接产出"显示那么宽"
-                              // 的位图（解码量与像素数成正比）。
-                              cacheWidth: _previewDecodeWidth(context, box),
+                              cacheWidth: _previewDecodeWidth(
+                                  context, box, _quarterTurns(previewJpeg!)),
                             ),
                           ),
                   ),
@@ -658,16 +721,15 @@ class _FullscreenPreviewScreenState extends State<_FullscreenPreviewScreen> {
               // 帧刷新不再连累全屏页里的横幅、按钮一起重建。
               ValueListenableBuilder<Uint8List?>(
                 valueListenable: provider.previewFrame,
+                // 【v3.10】同预览卡：跳过方向标记字节并在 GPU 上摆正。
+                // 全屏页故意【不】传 cacheWidth —— cover 铺满是放大，
+                // 按屏幕宽度解码反而会先把图缩小、放大后发虚。
                 builder: (context, frame, _) => frame == null
                     ? const Center(
                         child: Icon(Icons.videocam_off,
                             color: Colors.white24, size: 72),
                       )
-                    : Image.memory(frame,
-                        fit: BoxFit.cover,
-                        gaplessPlayback: true,
-                        // 全屏铺满是大面积缩放，低质量采样省光栅（同预览卡）
-                        filterQuality: FilterQuality.low),
+                    : _OrientedFrame(frame: frame, fit: BoxFit.cover),
               ),
               // 顶部红色横幅（硬件开着才见）——避开刘海/圆角安全区。
               // 注意：Positioned 必须是 Stack 的【直接】子组件，

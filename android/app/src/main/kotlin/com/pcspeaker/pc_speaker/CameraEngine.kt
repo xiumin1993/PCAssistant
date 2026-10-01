@@ -89,15 +89,6 @@ class CameraEngine(private val context: Context) {
         private val PIPELINE_WORKERS = (CPU_COUNT / 2).coerceIn(1, 4)
 
         /**
-         * 帧内（方向补偿）再切几段并行。
-         * 只在核富余时才叠加 —— 否则"帧间并行 × 帧内并行"会过度订阅：
-         * 8 核机上 4 帧 × 4 段 = 16 个线程抢 8 个核，反而比不并行更慢。
-         * 判据是"帧间用掉之后还剩至少 2 个核"才允许帧内开 2 段。
-         */
-        private val ROTATE_SLICES =
-            if (CPU_COUNT >= PIPELINE_WORKERS * 2 + 2) 2 else 1
-
-        /**
          * JPEG 质量。60 是"网络流"的通用甜点值：肉眼够用、体积适中，
          * 且与机器性能无关（编码耗时主要跟分辨率正相关，跟质量弱相关）。
          */
@@ -171,16 +162,10 @@ class CameraEngine(private val context: Context) {
     private val compressExecutor: ExecutorService =
         Executors.newFixedThreadPool(PIPELINE_WORKERS)
 
-    // 帧内（方向补偿）分段并行用的池，线程数 = ROTATE_SLICES（1 或 2）。
-    // 只在核富余时才真的提交任务（见 orientInto），否则这个池是空的、不占资源。
-    private val rotatePool: ExecutorService =
-        Executors.newFixedThreadPool(ROTATE_SLICES.coerceAtLeast(1))
-
     // ── 性能统计（v3.8.1 建立 / v3.8.2 扩展）：每 2 秒打一行 CamPerf ──
     // v3.8.2 起改为多帧并行，这些计数器会被多个线程同时累加 → 用 Atomic 或
     // 在打印时加锁。这里统一用 LongAdder（高并发累加比 AtomicLong 更快）。
     private val perfFrames = LongAdder()        // 窗口内完成压缩的帧数
-    private val perfRotateNs = LongAdder()      // 方向补偿累计耗时
     private val perfJpegNs = LongAdder()        // JPEG 编码累计耗时
     private val perfTotalNs = LongAdder()       // 单帧进流水线到出 JPEG 的墙钟耗时
     // 【v3.8.5】onImageAvailable 被回调的【原始次数】（取帧之前就计数）。
@@ -196,13 +181,6 @@ class CameraEngine(private val context: Context) {
     private var perfLastPrint = 0L              // 上次打印时刻（nanoTime）
     private val perfPrintLock = Any()           // 保护 perfLastPrint（多线程会同时到达）
 
-    // ── 采样表缓存（v3.8.2）────────────────────────────────────────
-    // orientInto 每帧都要用"目标像素 → 源像素"的映射表。只要
-    // (旋转角, 是否镜像, 源尺寸, 画布尺寸) 不变，这张表就是同一张 —— 缓存起来，
-    // 避免每帧重算（也不必每帧分配 4 个 IntArray）。
-    private var mapKey: String? = null
-    private var cachedMaps: Maps? = null
-    private val mapLock = Any()
 
     // 【v3.8.2】并发门：还在流水线里的帧数。原来是 boolean 互斥（一次只 1 帧），
     // 现在允许最多 PIPELINE_WORKERS 帧同时在飞 —— 满了才丢帧（保实时、不排队）。
@@ -216,12 +194,6 @@ class CameraEngine(private val context: Context) {
     private var nextEmitSeq = 0L                       // 下一个该发出的序号
     private val pendingFrames = TreeMap<Long, ByteArray>() // 早到的帧（按序号有序）
     private val emitLock = Any()                       // 保护上面两个字段
-
-    // ── 画布缓冲复用池（v3.8.2）────────────────────────────────────
-    // 30fps 时每帧要 new 一个 ~1MB 的 ByteArray，一秒 30MB 垃圾 → GC 抖动。
-    // 画布只在原生内部用（编码完就没用了），用完归还复用。
-    private val canvasPool = ArrayDeque<ByteArray>()
-    private val canvasLock = Any()
 
     // ── v3.4.1：手动旋转偏移（0/90/180/270，顺时针）──────────────
     // 自动摆正（传感器角+持握角）之外，再叠加用户手动点"旋转90°"的偏移。
@@ -547,38 +519,14 @@ class CameraEngine(private val context: Context) {
                     perfConvNs.add(System.nanoTime() - convStartNs)
 
                     val frameStartNs = System.nanoTime()
-                    // ── 方向补偿流水线（每帧在压缩线程做，不碰采集线程）──
-                    // 1) 按"传感器安装角 + 手机持握角"把 NV21 转正（竖着拿 → 竖屏正像）
-                    // 2) 前置镜头再水平镜像（自拍视角，和手机屏幕预览一致）
-                    // 3) 统一装进"横向画布"（PC 会话尺寸，随设备协商出来的档位而变）：
-                    //    竖屏内容居中、左右加黑边 —— 电脑端虚拟摄像头格式恒定，
-                    //    任何应用打开都不会因分辨率变化而黑屏
-                    // ── v3.8.2：方向补偿【一步到位】──────────────────────
-                    // 原来是三步串行，每步都 new 一个 ~1MB 数组并遍历整帧：
-                    //   rotateNv21(69 万次) → mirrorNv21 → fitNv21Into(39 万次)
-                    // 现在合成一次"目标驱动"的采样：直接把源像素旋转+缩放+居中
-                    // 写进画布，遍历量从 ~108 万次降到 ~39 万次，还省两次内存分配。
-                    val deg = rotationNeededDegrees()
-                    val mirror = (currentFacing == "front")
-                    // 画布 = 会话协商的横向尺寸（宽≥高）
-                    val cw = maxOf(currentWidth, currentHeight)
-                    val ch = minOf(currentWidth, currentHeight)
-
-                    val canvas = borrowCanvas(cw * ch * 3 / 2)
-                    val afterOrientNs: Long
-                    val jpeg: ByteArray
-                    try {
-                        orientInto(nv21, currentWidth, currentHeight, deg, mirror, cw, ch, canvas)
-                        afterOrientNs = System.nanoTime()
-                        jpeg = nv21ToJpeg(canvas, cw, ch, JPEG_QUALITY)
-                    } finally {
-                        returnCanvas(canvas) // 画布用完归还，下帧复用
-                    }
+                    // 【v3.10】这里【不再】做方向补偿 —— 编码原始朝向的 NV21，
+                    // 方向通过一个标记字节交给 PC 与手机预览各自处理（见 withOrientTag）。
+                    val jpeg = nv21ToJpeg(nv21, currentWidth, currentHeight, JPEG_QUALITY)
                     val frameEndNs = System.nanoTime()
                     // 按序号排队输出（并行后完成顺序会乱，这里排回原序）
-                    emitOrdered(seq, jpeg)
+                    emitOrdered(seq, withOrientTag(jpeg))
 
-                    recordFrameStats(frameStartNs, afterOrientNs, frameEndNs, cw, ch, "C2")
+                    recordFrameStats(frameStartNs, frameEndNs, currentWidth, currentHeight, "C2")
                 } catch (_: Exception) {
                     // 单帧失败无所谓，丢掉继续 —— 但要占位发出去，
                     // 否则保序队列会永远等这个序号，后面所有帧都卡住。
@@ -769,7 +717,6 @@ class CameraEngine(private val context: Context) {
      */
     private fun recordFrameStats(
         frameStartNs: Long,
-        afterOrientNs: Long,
         frameEndNs: Long,
         cw: Int,
         ch: Int,
@@ -780,8 +727,10 @@ class CameraEngine(private val context: Context) {
         //   · cb≈30 而 cam 低   → 帧在取帧时被合并，回调线程来不及
         //   · cb≈cam≈10         → 相机真的只出 10fps
         perfFrames.increment()
-        perfRotateNs.add(afterOrientNs - frameStartNs)
-        perfJpegNs.add(frameEndNs - afterOrientNs)
+        // 【v3.10】方向补偿已迁到 PC 端（见 withOrientTag），手机上不再做像素重排，
+        // 所以整帧耗时就是 JPEG 编码耗时 —— rotate 这一项恒为 0，留着只为
+        // 日志口径不变（看到非 0 就说明有别的开销混进来了）。
+        perfJpegNs.add(frameEndNs - frameStartNs)
         perfTotalNs.add(frameEndNs - frameStartNs)
 
         val winNs = synchronized(perfPrintLock) {
@@ -807,7 +756,6 @@ class CameraEngine(private val context: Context) {
                     " cb=" + (cb * 1000.0 / winMs).format1() + "fps" +
                     " drop=" + drop +
                     " conv=" + (perfConvNs.sumThenReset() / f / 1_000_000.0).format1() + "ms" +
-                    " rotate=" + (perfRotateNs.sumThenReset() / f / 1_000_000.0).format1() + "ms" +
                     " jpeg=" + (perfJpegNs.sumThenReset() / f / 1_000_000.0).format1() + "ms" +
                     " total=" + (perfTotalNs.sumThenReset() / f / 1_000_000.0).format1() + "ms" +
                     " size=" + cw + "x" + ch
@@ -816,7 +764,7 @@ class CameraEngine(private val context: Context) {
 
     /**
      * 【v3.9】Camera1 直连 HAL1 的采集路径（只给 LEGACY 设备用）。
-     * 与 Camera2 路径共用同一套下游：orientInto → nv21ToJpeg → emitOrdered → onFrame。
+     * 与 Camera2 路径共用同一套下游：nv21ToJpeg → withOrientTag → emitOrdered → onFrame。
      * 差别只有两处：① 回调直接给 NV21，不用再转；② 帧率用 HAL1 原生参数锁。
      */
     @Suppress("DEPRECATION")
@@ -960,30 +908,17 @@ class CameraEngine(private val context: Context) {
             compressExecutor.execute {
                 try {
                     val frameStartNs = System.nanoTime()
-                    val deg = rotationNeededDegrees()
-                    val mirror = (currentFacing == "front")
-                    val cw = maxOf(currentWidth, currentHeight)
-                    val ch = minOf(currentWidth, currentHeight)
-                    val canvas = borrowCanvas(cw * ch * 3 / 2)
-                    val afterOrientNs: Long
-                    val jpeg: ByteArray
-                    try {
-                        // 注意：这里直接用回调给的 NV21（data），
-                        // 不再经过 yuvToNv21 —— Camera1 给的就是 NV21。
-                        orientInto(data, currentWidth, currentHeight, deg, mirror, cw, ch, canvas)
-                        afterOrientNs = System.nanoTime()
-                        jpeg = nv21ToJpeg(canvas, cw, ch, JPEG_QUALITY)
-                    } finally {
-                        returnCanvas(canvas)
-                    }
+                    // 注意：这里直接用回调给的 NV21（data），不再经过 yuvToNv21
+                    // —— Camera1 给的就是 NV21。
+                    val jpeg = nv21ToJpeg(data, currentWidth, currentHeight, JPEG_QUALITY)
                     val frameEndNs = System.nanoTime()
-                    emitOrdered(seq, jpeg)
-                    recordFrameStats(frameStartNs, afterOrientNs, frameEndNs, cw, ch, "C1")
+                    emitOrdered(seq, withOrientTag(jpeg))
+                    recordFrameStats(frameStartNs, frameEndNs, currentWidth, currentHeight, "C1")
                 } catch (_: Exception) {
                     emitOrdered(seq, EMPTY_JPEG)
                 } finally {
                     // 缓冲在【处理完之后】才还 —— 还早了相机会往这块内存里写下帧，
-                    // 正在读它的 orientInto 就会读到半新半旧的画面。
+                    // 正在读它的 JPEG 编码器就会读到半新半旧的画面。
                     camera.addCallbackBuffer(data)
                     inFlight.decrementAndGet()
                 }
@@ -1192,214 +1127,41 @@ class CameraEngine(private val context: Context) {
         return (auto + manualRotation) % 360
     }
 
-    // （v3.8.2）旋转/镜像/装裱三个旧函数已被下面的 orientInto() 取代并删除：
-    // 它们每帧各做一次全帧遍历、各分配 ~1MB —— 是 6fps 的主因之一。
-    // 需要回看实现的话 git 历史里有。
     // ==========================================================================
-    // 【v3.8.2】方向补偿：旋转 + 镜像 + 装裱 合并成"一次采样"
+    // 【v3.10】方向补偿迁出手机：只发一个标记，旋转交给 PC
     // --------------------------------------------------------------------------
-    // 旧做法是三步串行，每步都 new 一个 ~1MB 数组并完整遍历一帧：
-    //     rotateNv21(69 万次) → mirrorNv21 → fitNv21Into(39 万次)
-    // 新做法：以"目标内容像素"为驱动，直接算出它该采源图的哪个像素，
-    // 旋转/镜像/缩放/居中一次算完。遍历量 ~108 万次 → ~39 万次，还省两次分配。
+    // 之前每帧在手机上做像素级重排（orientInto，实测 27~28ms/帧，比 JPEG 编码之外
+    // 最贵的一段），还顺带把画面塞进"横向画布"等比缩放 —— 960×720 旋转后塞回
+    // 960×720，实际内容只剩 540×720，白白丢掉约 44% 的像素。
+    //
+    // 现在手机只编码原始朝向的 JPEG，并在帧头带 1 字节标记；旋转与镜像由
+    // ① PC 端（解码成 RGBA 后做，PC 算力富余，成本可忽略）
+    // ② 手机自己的预览（Flutter 用 RotatedBox/Transform 走 GPU，同样免费）
+    // 各自完成。手机上省掉的 28ms/帧 全部还给 CPU、发热与续航。
     // ==========================================================================
 
     /**
-     * "目标内容像素 → 源像素"的映射表。
-     *
-     * 为什么能拆成两张一维表：NV21 旋转 0/90/180/270 后，源坐标 (sx,sy) 对目标
-     * (dx,dy) 的依赖总是【可分离】的 —— 一个只跟 dx 有关、另一个只跟 dy 有关
-     * （推导见 buildInner/buildOuter）。于是内层循环退化成纯查表，
-     * 没有乘除、没有分支，这是本次提速的主要来源。
-     *
-     * @param inner      按 dx 索引的表（长度 dw）
-     * @param outer      按 dy 索引的表（长度 dh）
-     * @param innerIsRow true = inner 给的是源"行" sy；false = 给的是源"列" sx
+     * 生成 1 字节方向标记：
+     *   bit0~1 = 需要【顺时针】转几个 90°（0~3）
+     *   bit2   = 1 表示还要水平镜像（前置镜头自拍视角）
      */
-    private data class Maps(
-        val innerY: IntArray,
-        val outerY: IntArray,
-        val innerC: IntArray,
-        val outerC: IntArray,
-        val innerIsRow: Boolean,
-        val dw: Int, val dh: Int,  // 内容区尺寸（已取偶数，满足色度 2×2 对齐）
-        val ox: Int, val oy: Int,  // 内容区左上角在画布中的偏移（已取偶数）
-    )
-
-    /** 取（或构建）映射表：参数不变时直接复用缓存，避免每帧重算与重新分配。 */
-    private fun getMaps(deg: Int, mirror: Boolean, w: Int, h: Int, cw: Int, ch: Int): Maps {
-        val key = "$deg|$mirror|$w|$h|$cw|$ch"
-        synchronized(mapLock) {
-            val c = cachedMaps
-            if (key == mapKey && c != null) return c
-            val m = buildMaps(deg, mirror, w, h, cw, ch)
-            mapKey = key
-            cachedMaps = m
-            return m
-        }
-    }
-
-    private fun buildMaps(deg: Int, mirror: Boolean, w: Int, h: Int, cw: Int, ch: Int): Maps {
-        val swap = (deg == 90 || deg == 270)
-        val rw = if (swap) h else w   // 旋转后的宽
-        val rh = if (swap) w else h   // 旋转后的高
-        // 等比缩放：长边贴画布，宽高取偶数（色度 2×2 对齐要求）
-        val scale = minOf(cw.toFloat() / rw, ch.toFloat() / rh)
-        val dw = (rw * scale).toInt() / 2 * 2
-        val dh = (rh * scale).toInt() / 2 * 2
-        val ox = (cw - dw) / 2 / 2 * 2
-        val oy = (ch - dh) / 2 / 2 * 2
-
-        // Y 平面：源 w×h，旋转后 rw×rh，内容 dw×dh
-        val innerY = buildInner(deg, mirror, w, h, rw, dw)
-        val outerY = buildOuter(deg, w, h, rh, dh)
-        // 色度平面：网格整体减半（行字节跨距仍等于 w）
-        val innerC = buildInner(deg, mirror, w / 2, h / 2, rw / 2, dw / 2)
-        val outerC = buildOuter(deg, w / 2, h / 2, rh / 2, dh / 2)
-        // 90/270 时 inner 是"源行"；0/180 时 inner 是"源列"
-        return Maps(innerY, outerY, innerC, outerC, swap, dw, dh, ox, oy)
-    }
-
-    /** 依赖 dx 的那个源坐标。n=旋转后该轴尺寸, dn=内容区该轴尺寸。 */
-    private fun buildInner(deg: Int, mirror: Boolean, w: Int, h: Int, rn: Int, dn: Int): IntArray {
-        val out = IntArray(dn)
-        for (d in 0 until dn) {
-            // 镜像作用在【旋转后的图】上，即 r → rn-1-r（先缩放再翻转）。
-            // 注意不能写成"先翻转目标列再缩放"：那样在缩放比例不是 1:1 时
-            // 会因整数截断引入最多 1 像素的整体偏移（画面轻微偏一边）。
-            val r0 = d * rn / dn
-            val r = if (mirror) rn - 1 - r0 else r0
-            out[d] = when (deg) {
-                0 -> r           // sx = rx
-                90 -> h - 1 - r  // sy = h-1-rx
-                180 -> w - 1 - r // sx = w-1-rx
-                else -> r        // 270: sy = rx
-            }
-        }
-        return out
-    }
-
-    /** 依赖 dy 的那个源坐标。 */
-    private fun buildOuter(deg: Int, w: Int, h: Int, rn: Int, dn: Int): IntArray {
-        val out = IntArray(dn)
-        for (d in 0 until dn) {
-            val r = d * rn / dn
-            out[d] = when (deg) {
-                0 -> r           // sy = ry
-                90 -> r          // sx = ry
-                180 -> h - 1 - r // sy = h-1-ry
-                else -> w - 1 - r// 270: sx = w-1-ry
-            }
-        }
-        return out
+    private fun orientFlags(): Int {
+        val q = rotationNeededDegrees() / 90
+        return (q and 0x3) or (if (currentFacing == "front") 0x4 else 0)
     }
 
     /**
-     * 把 src(w×h) 旋转 →（前置时）镜像 → 等比居中装裱，结果写进 cw×ch 的画布。
-     * 画布由 borrowCanvas() 提供并复用，本函数只负责填内容。
+     * 在 JPEG 前面拼 1 字节方向标记，得到"上行帧载荷"。
+     * 布局：[flags][JPEG...] —— Dart 侧在它前面再加 4 字节 CAM 魔术头；
+     * 手机预览用 `sublistView(bytes, 1)` 零拷贝地跳过这一字节。
      */
-    private fun orientInto(
-        src: ByteArray, w: Int, h: Int, deg: Int, mirror: Boolean,
-        cw: Int, ch: Int, out: ByteArray
-    ) {
-        // 画布先涂"视频黑"：Y=16、色度=128（YUV 有限量程下的纯黑，不是 0/0）
-        Arrays.fill(out, 0, cw * ch, 16.toByte())
-        Arrays.fill(out, cw * ch, out.size, 128.toByte())
-
-        val m = getMaps(deg, mirror, w, h, cw, ch)
-        if (m.dw <= 0 || m.dh <= 0) return
-
-        // ── Y 平面：按目标行分段填充（各段写入行互不相交 → 零锁零竞争）──
-        fun fillRows(y0: Int, y1: Int) {
-            if (m.innerIsRow) {
-                // inner = 源行 sy；outer = 源列 sx
-                for (dy in y0 until y1) {
-                    val sx = m.outerY[dy]
-                    var dp = (m.oy + dy) * cw + m.ox
-                    val inn = m.innerY
-                    for (dx in 0 until m.dw) out[dp++] = src[inn[dx] * w + sx]
-                }
-            } else {
-                for (dy in y0 until y1) {
-                    val sRow = m.outerY[dy] * w
-                    var dp = (m.oy + dy) * cw + m.ox
-                    val inn = m.innerY
-                    for (dx in 0 until m.dw) out[dp++] = src[sRow + inn[dx]]
-                }
-            }
-        }
-
-        if (ROTATE_SLICES <= 1) {
-            // 核不富余（中低端机常见）：直接在本线程做完。
-            // 这时再切段只会增加线程调度和 latch 同步的开销，得不偿失。
-            fillRows(0, m.dh)
-        } else {
-            val chunk = (m.dh + ROTATE_SLICES - 1) / ROTATE_SLICES
-            val latch = CountDownLatch(ROTATE_SLICES)
-            for (t in 0 until ROTATE_SLICES) {
-                val y0 = t * chunk
-                val y1 = minOf(m.dh, y0 + chunk)
-                if (y0 >= y1) { latch.countDown(); continue } // dh 很小时多出空段
-                rotatePool.execute {
-                    try {
-                        fillRows(y0, y1)
-                    } finally {
-                        latch.countDown()
-                    }
-                }
-            }
-            latch.await()
-        }
-
-        // ── 色度平面：数据量只有 Y 的 1/4，并行调度不划算，单线程 ──
-        val ySize = w * h
-        val cdw = m.dw / 2
-        val cdh = m.dh / 2
-        if (m.innerIsRow) {
-            for (dy in 0 until cdh) {
-                val sxc = m.outerC[dy] * 2 // 色度列 → 字节偏移
-                var dp = cw * ch + (m.oy / 2 + dy) * cw + m.ox
-                val inn = m.innerC
-                for (dx in 0 until cdw) {
-                    val sRow = ySize + inn[dx] * w
-                    out[dp++] = src[sRow + sxc]
-                    out[dp++] = src[sRow + sxc + 1]
-                }
-            }
-        } else {
-            for (dy in 0 until cdh) {
-                val sRow = ySize + m.outerC[dy] * w
-                var dp = cw * ch + (m.oy / 2 + dy) * cw + m.ox
-                val inn = m.innerC
-                for (dx in 0 until cdw) {
-                    val si = sRow + inn[dx] * 2
-                    out[dp++] = src[si]
-                    out[dp++] = src[si + 1]
-                }
-            }
-        }
+    private fun withOrientTag(jpeg: ByteArray): ByteArray {
+        // 标记在【编码之后】才取：旋转角会随手机持握方向变，取晚了会滞后一帧。
+        val out = ByteArray(jpeg.size + 1)
+        out[0] = orientFlags().toByte()
+        System.arraycopy(jpeg, 0, out, 1, jpeg.size)
+        return out
     }
-
-    /** 取一块可复用的画布缓冲；池里没有合适尺寸就新分配一块。 */
-    private fun borrowCanvas(size: Int): ByteArray {
-        synchronized(canvasLock) {
-            while (canvasPool.isNotEmpty()) {
-                val b = canvasPool.removeLast()
-                if (b.size == size) return b
-            }
-        }
-        return ByteArray(size)
-    }
-
-    /** 归还画布缓冲（30fps 下每帧省掉 ~1MB 的分配，避免 GC 抖动）。 */
-    private fun returnCanvas(b: ByteArray) {
-        synchronized(canvasLock) {
-            // 大分辨率画布少留几块：4K 一块就是 12MB，留 6 块 = 72MB 太浪费
-            val cap = if (b.size > 8_000_000) 2 else PIPELINE_WORKERS + 2
-            if (canvasPool.size < cap) canvasPool.addLast(b)
-        }
-    }
-
     /**
      * 按序号把帧排回原序再发出去。
      * 多帧并行后完成顺序会乱，直接发会出现"画面回跳"；这里让早到的帧
@@ -1438,7 +1200,6 @@ class CameraEngine(private val context: Context) {
     fun dispose() {
         stop()
         compressExecutor.shutdownNow()
-        rotatePool.shutdownNow() // v3.8.1：旋转并行池一并关掉
     }
 
     /** 性能日志用：保留 1 位小数（Double 扩展函数，只在本文件可见） */
