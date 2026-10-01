@@ -121,6 +121,14 @@ class CameraEngine(
          */
         private const val JPEG_QUALITY = 90
 
+        /**
+         * 【v3.14】只有"单次对焦"（FOCUS_MODE_AUTO）模式时的重新对焦间隔。
+         * 单次对焦不会跟着场景变化 —— 手机一动、物体一挪就失焦，所以必须
+         * 定期重触发。4 秒是折中：太频繁画面会不停"拉风箱"（来回呼吸），
+         * 太慢则移动完要糊很久。连续对焦模式下这个值用不到。
+         */
+        private const val REFOCUS_INTERVAL_MS = 4000L
+
         /** 占位用的空帧：某帧处理失败时用它顶上，防止保序队列卡死 */
         private val EMPTY_JPEG = ByteArray(0)
     }
@@ -182,6 +190,27 @@ class CameraEngine(
     // 而是一块 Flutter 能直接采样的 GPU 纹理（见 previewEntry）。只有注册表
     // 不可用时才退回纯离屏的 SurfaceTexture（那时预览走老 JPEG 解码路径）。
     private var cam1DummySurface: SurfaceTexture? = null
+
+    // ══════════════════════════════════════════════════════════════════
+    // 【v3.14】自动对焦
+    // ------------------------------------------------------------------
+    // 之前两条路径【都没有设过任何对焦参数】。本机实测（dumpsys media.camera）：
+    //   focus-mode: auto            ← 单次对焦模式，必须自己调 autoFocus() 才动
+    //   focus-distances: Infinity   ← 焦点一直停在无穷远
+    //   focus-done: false           ← 从没完成过一次对焦
+    // 而 focus-mode-values 里明明有 continuous-video / continuous-picture。
+    // 于是镜头停在上电默认位，近处永远糊 —— 这就是"预览清晰度差"的主因
+    //（预览本身是 GPU 纹理直出、零压缩，与原生相机同一条路，不是压缩问题）。
+    //
+    // 优先级：continuous-video > continuous-picture > auto(+触发) > macro > edof
+    //   视频推流选 continuous-video：它专为连续画面设计，对焦过程平滑，
+    //   不会像 picture 那样频繁"拉风箱"（画面来回呼吸）。
+    //   只有 auto 时必须在 startPreview 之后【手动触发】一次，并且要周期性
+    //   重触发 —— 单次对焦不会跟着场景变化，手机一动就又糊了。
+    // 一切取自【设备自己上报的】supportedFocusModes，不写死任何机型假设。
+    // ══════════════════════════════════════════════════════════════════
+    private var cam1FocusMode: String? = null
+    private var cam1RefocusRunnable: Runnable? = null
 
     // ══════════════════════════════════════════════════════════
     // 【v3.11】预览走 GPU 纹理：彻底干掉"每帧解码一张 JPEG"
@@ -841,7 +870,44 @@ class CameraEngine(
                     Range(target, target)
                 )
             }
+            // 【v3.14】自动对焦：与 Camera1 同一套优先级（见 cam1FocusMode 处注释），
+            // 同样只从【设备上报的】CONTROL_AF_AVAILABLE_MODES 里挑，绝不写死。
+            val afModes = try {
+                cameraManager.getCameraCharacteristics(camId)
+                    .get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)
+            } catch (_: Exception) {
+                null
+            }
+            val af = pickAfMode2(afModes)
+            if (af != null) {
+                try {
+                    builder.set(CaptureRequest.CONTROL_AF_MODE, af)
+                    // CONTROL_MODE=AUTO 是 3A 能跑起来的前提（OFF 时 HAL 会锁死对焦）
+                    builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                } catch (_: Exception) {
+                    // 设不了就算了，绝不能因为对焦设不上就打不开相机
+                }
+            }
+            Log.i(
+                "CamPerf",
+                "Camera2 对焦 supported=" + (afModes?.joinToString(",") ?: "null") +
+                        " chosen=" + (af?.toString() ?: "none")
+            )
             captureSession!!.setRepeatingRequest(builder.build(), null, bgHandler)
+            // 单次对焦模式必须显式下发一次触发，否则镜头压根不动
+            if (af == CaptureRequest.CONTROL_AF_MODE_AUTO) {
+                try {
+                    val trig = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                    trig.addTarget(reader.surface)
+                    trig.set(CaptureRequest.CONTROL_AF_MODE, af)
+                    trig.set(
+                        CaptureRequest.CONTROL_AF_TRIGGER,
+                        CaptureRequest.CONTROL_AF_TRIGGER_START
+                    )
+                    captureSession!!.capture(trig.build(), null, bgHandler)
+                } catch (_: Exception) {
+                }
+            }
         } catch (_: Exception) {
             cleanup()
             return "SESSION_FAILED"
@@ -1018,6 +1084,9 @@ class CameraEngine(
                     (ranges?.joinToString(",") { "(${it[0]},${it[1]})" } ?: "?")
             )
         }
+        // 【v3.14】自动对焦：从设备上报的模式里挑最合适的一个（见字段处注释）
+        applyFocusMode1(params)
+
         try {
             cam.parameters = params
         } catch (_: Exception) {
@@ -1110,6 +1179,8 @@ class CameraEngine(
             cam.startPreview()
             cam1 = cam
             running = true
+            // 【v3.14】连续对焦自己会一直调，只有"单次对焦"才需要我们触发
+            scheduleAutoFocus1(cam)
             null
         } catch (_: Exception) {
             cam.release()
@@ -1117,6 +1188,101 @@ class CameraEngine(
             cam1Thread = null
             cam1Handler = null
             "SESSION_FAILED"
+        }
+    }
+
+    /**
+     * 【v3.14】Camera1 路径：挑一个自动对焦模式写进参数。
+     * 全程只认【设备自己上报的】supportedFocusModes —— 不同机器差别极大
+     * （有连续对焦的、只有单次对焦的、定焦的），写死任何一种都会在别的机器上出错。
+     * 任何一步失败都只是"不对焦"，绝不影响开相机。
+     */
+    @Suppress("DEPRECATION")
+    private fun applyFocusMode1(params: android.hardware.Camera.Parameters) {
+        val modes = try {
+            params.supportedFocusModes
+        } catch (_: Exception) {
+            null
+        }
+        if (modes.isNullOrEmpty()) {
+            Log.i("CamPerf", "Camera1 对焦：设备未上报 supportedFocusModes，沿用默认")
+            return
+        }
+        // Camera1 的常量都在 Camera.Parameters 里，Kotlin 不能把类赋给变量，
+        // 所以这里用完整限定名（写起来啰嗦，但零歧义）。
+        val F = android.hardware.Camera.Parameters.FOCUS_MODE_AUTO
+        val video = android.hardware.Camera.Parameters.FOCUS_MODE_CONTINUOUS_VIDEO
+        val picture = android.hardware.Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE
+        val macro = android.hardware.Camera.Parameters.FOCUS_MODE_MACRO
+        val edof = android.hardware.Camera.Parameters.FOCUS_MODE_EDOF
+        var pick: String? = when {
+            modes.contains(video) -> video
+            modes.contains(picture) -> picture
+            modes.contains(F) -> F
+            modes.contains(macro) -> macro
+            modes.contains(edof) -> edof
+            else -> null
+        }
+        if (pick != null) {
+            pick = try {
+                params.focusMode = pick
+                pick
+            } catch (_: Exception) {
+                null // 个别 HAL 拒收某个模式：置空沿用默认，不能因此开不了相机
+            }
+        }
+        cam1FocusMode = pick
+        Log.i(
+            "CamPerf",
+            "Camera1 对焦 supported=" + modes.joinToString(",") +
+                    " chosen=" + (pick ?: "default")
+        )
+    }
+
+    /**
+     * 【v3.14】Camera1 路径：只有"单次对焦"模式才需要我们自己触发。
+     * 连续对焦（continuous-*）是相机内部持续进行的，调 autoFocus 反而会打断它。
+     * 单次对焦不会跟着场景变化，所以按固定间隔重新触发一次。
+     * 必须在 startPreview 之后调 —— 没出预览就对焦，HAL 会直接忽略或报错。
+     */
+    @Suppress("DEPRECATION")
+    private fun scheduleAutoFocus1(cam: android.hardware.Camera) {
+        if (cam1FocusMode != android.hardware.Camera.Parameters.FOCUS_MODE_AUTO) return
+        val handler = cam1Handler ?: return
+        val task = object : Runnable {
+            override fun run() {
+                if (!running || cam1 == null) return
+                try {
+                    cam.autoFocus(null)
+                } catch (_: Exception) {
+                    // 有些 HAL 在持续预览下拒绝单次对焦：停掉，别每 4 秒刷一条日志
+                    cam1RefocusRunnable = null
+                    return
+                }
+                handler.postDelayed(this, REFOCUS_INTERVAL_MS)
+            }
+        }
+        cam1RefocusRunnable = task
+        // 刚开预览先让它稳定一下再对焦，立刻调容易被 HAL 忽略
+        handler.postDelayed(task, 700)
+    }
+
+    /** 【v3.14】Camera2 路径的对焦模式挑选：与 Camera1 同一套优先级，同样只认设备上报值。 */
+    private fun pickAfMode2(modes: IntArray?): Int? {
+        if (modes == null || modes.isEmpty()) return null
+        fun has(v: Int) = modes.any { it == v }
+        return when {
+            has(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO) ->
+                CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
+            has(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE) ->
+                CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+            has(CaptureRequest.CONTROL_AF_MODE_AUTO) ->
+                CaptureRequest.CONTROL_AF_MODE_AUTO
+            has(CaptureRequest.CONTROL_AF_MODE_MACRO) ->
+                CaptureRequest.CONTROL_AF_MODE_MACRO
+            has(CaptureRequest.CONTROL_AF_MODE_EDOF) ->
+                CaptureRequest.CONTROL_AF_MODE_EDOF
+            else -> null
         }
     }
 
@@ -1161,6 +1327,19 @@ class CameraEngine(
     private fun cleanup1() {
         try {
             cam1?.setPreviewCallback(null)
+        } catch (_: Exception) {
+        }
+        // 【v3.14】停掉周期性重对焦：相机都要关了，再排队触发就是浪费
+        cam1RefocusRunnable?.let { r ->
+            try {
+                cam1Handler?.removeCallbacks(r)
+            } catch (_: Exception) {
+            }
+        }
+        cam1RefocusRunnable = null
+        cam1FocusMode = null
+        try {
+            cam1?.cancelAutoFocus()
         } catch (_: Exception) {
         }
         try {
