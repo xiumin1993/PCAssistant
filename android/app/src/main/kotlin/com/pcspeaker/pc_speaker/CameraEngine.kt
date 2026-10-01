@@ -132,6 +132,37 @@ class CameraEngine(private val context: Context) {
     private var bgThread: HandlerThread? = null
     private var bgHandler: Handler? = null
 
+    // ══════════════════════════════════════════════════════════
+    // 【v3.9】Camera1 快速路径（只给 HAL1 / LEGACY 设备用）
+    // ------------------------------------------------------------------
+    // 为什么要有第二条路：实测这台机 `dumpsys media.camera` 打印
+    //   Camera module HAL API version: 0x100   ← HAL 是 v1，不是 v3
+    // 也就是说 Camera2 在这台机上【没有真正的 HAL 支撑】，全靠 framework 的
+    // legacy 兼容层（LegacyCameraDevice）把 Camera1 的预览帧转换出来：
+    //   · 它要用一条 GL 线程做缓冲转换（实测 CameraDeviceGLT 单独吃了 0.97 核）；
+    //   · CONTROL_AE_TARGET_FPS_RANGE 这类控制它基本不认 —— 我们下发了 (30,30)，
+    //     相机照样只给 10fps，且不随环境亮度变化、不随我们处理速度变化。
+    //
+    // 换成 Camera1 直连 HAL1 之后：
+    //   · setPreviewFpsRange(30000,30000) 是 HAL1 自己的原生参数，认；
+    //   · 回调直接给 NV21 —— 连我们自己的 yuvToNv21 都省了（conv 9ms → 0）；
+    //   · 没有 GL 转换线程那一个核的开销。
+    //
+    // ⚠ 分辨率/帧率档位【完全不变】，仍然由 Dart 从设备能力清单挑出来传进来，
+    //   只是不再绕兼容层 —— 这不是"降档"，是"换一条不打折的路"。
+    // ══════════════════════════════════════════════════════════
+    @Suppress("DEPRECATION")
+    private var cam1: android.hardware.Camera? = null
+    private var cam1Thread: HandlerThread? = null
+    private var cam1Handler: Handler? = null
+    // 离屏"预览承载"。Camera1 不挂一个承载就不出帧，而我们不需要真的显示。
+    // ⚠ 必须用一个字段【持有引用】：SurfaceTexture 靠 finalize 释放显存，
+    // 只 new 出来不存的话随时可能被 GC 回收 → 相机拿到一个已释放的纹理，
+    // 表现是"预览跑一会儿就报错/黑屏"，而且很难复现。
+    private var cam1DummySurface: SurfaceTexture? = null
+    /** 回调缓冲数量：够 PIPELINE_WORKERS 帧同时在飞 + 相机自己手里再拿几张 */
+    private val cam1BufferCount = PIPELINE_WORKERS + 3
+
     // 【v3.8.2】帧处理线程池：压缩不在采集线程上做，避免拖慢取帧。
     // 原来是「单线程 + jpegBusy 互斥门」——不管这台机有多少核，一次只跑 1 帧，
     // 一帧 82ms 期间其余核全在睡觉，实测吞吐只有 6fps。
@@ -379,6 +410,32 @@ class CameraEngine(private val context: Context) {
             90
         }
 
+        // 【v3.9】先问设备：这颗头的 Camera2 是真 HAL 还是兼容层？
+        // LEGACY = framework 用 LegacyCameraDevice 模拟出来的 Camera2
+        //（这台机 HAL 是 v1，实测 Camera module HAL API version: 0x100）。
+        // 那种情况下走 Camera1 直连 HAL 才拿得到正常帧率，见上面字段注释。
+        val level = try {
+            cameraManager.getCameraCharacteristics(camId).get(
+                CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL
+            )
+        } catch (_: Exception) {
+            null
+        }
+        val legacy = level == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY
+        Log.i(
+            "CamPerf",
+            "start facing=" + facing + " hwLevel=" + level + " legacy=" + legacy +
+                    " → " + (if (legacy) "Camera1(原生HAL1)" else "Camera2") +
+                    " " + width + "x" + height + "@" + currentFps
+        )
+        if (legacy) {
+            // 兜底：Camera1 万一在这台机上起不来（罕见 HAL 怪癖），
+            // 绝不让用户"摄像头彻底打不开" —— 退回原来那条能用的 Camera2 路。
+            val err1 = startCamera1(camId)
+            if (err1 == null) return null
+            Log.w("CamPerf", "Camera1 启动失败($err1)，回退 Camera2 兼容层")
+        }
+
         // 第二步：起一条后台消息线程。
         // Camera2 要求回调在某个 Handler 的线程上执行；放在独立线程
         // 就不阻塞界面（Flutter UI）线程。
@@ -521,48 +578,7 @@ class CameraEngine(private val context: Context) {
                     // 按序号排队输出（并行后完成顺序会乱，这里排回原序）
                     emitOrdered(seq, jpeg)
 
-                    // ── 性能统计（v3.8.2）：每 2 秒打一行 ──
-                    // out = 真正发出去的帧率；cam = 相机送来的帧率。
-                    // 两者对比就能一眼看出瓶颈在哪：
-                    //   · cam≈30 而 out 低  → 我们处理慢（看 rotate/jpeg）
-                    //   · cam 本身就只有 7 → 弱光曝光拉长了，改代码没用
-                    perfFrames.increment()
-                    perfRotateNs.add(afterOrientNs - frameStartNs)
-                    perfJpegNs.add(frameEndNs - afterOrientNs)
-                    perfTotalNs.add(frameEndNs - frameStartNs)
-
-                    val winNs = synchronized(perfPrintLock) {
-                        if (perfLastPrint == 0L) {
-                            perfLastPrint = frameEndNs; 0L
-                        } else if (frameEndNs - perfLastPrint >= 2_000_000_000L) {
-                            val w = frameEndNs - perfLastPrint
-                            perfLastPrint = frameEndNs
-                            w
-                        } else 0L
-                    }
-                    if (winNs > 0L) {
-                        val f = perfFrames.sumThenReset().coerceAtLeast(1)
-                        val winMs = winNs / 1_000_000.0
-                        val cam = perfCamArrived.sumThenReset()
-                        val drop = perfDropped.sumThenReset()
-                        val cb = perfCbInvoked.sumThenReset()
-                        Log.i(
-                            "CamPerf",
-                            "out=" + (f * 1000.0 / winMs).format1() + "fps" +
-                                    " cam=" + (cam * 1000.0 / winMs).format1() + "fps" +
-                                    " cb=" + (cb * 1000.0 / winMs).format1() + "fps" +
-                                    " drop=" + drop +
-                                    " conv=" + (perfConvNs.sumThenReset() / f / 1_000_000.0)
-                                .format1() + "ms" +
-                                    " rotate=" + (perfRotateNs.sumThenReset() / f / 1_000_000.0)
-                                .format1() + "ms" +
-                                    " jpeg=" + (perfJpegNs.sumThenReset() / f / 1_000_000.0)
-                                .format1() + "ms" +
-                                    " total=" + (perfTotalNs.sumThenReset() / f / 1_000_000.0)
-                                .format1() + "ms" +
-                                    " size=" + cw + "x" + ch
-                        )
-                    }
+                    recordFrameStats(frameStartNs, afterOrientNs, frameEndNs, cw, ch, "C2")
                 } catch (_: Exception) {
                     // 单帧失败无所谓，丢掉继续 —— 但要占位发出去，
                     // 否则保序队列会永远等这个序号，后面所有帧都卡住。
@@ -736,13 +752,285 @@ class CameraEngine(private val context: Context) {
 
     /** 停止采集并释放所有相机资源（幂等：没开就直接返回） */
     fun stop() {
-        if (!running && cameraDevice == null) {
+        if (!running && cameraDevice == null && cam1 == null) {
             onFrame = null
             return
         }
         running = false
         cleanup()
+        cleanup1() // 【v3.9】Camera1 路径也要关（cam1 为空时是空操作）
         onFrame = null
+    }
+
+    /**
+     * 【v3.9】性能统计与 2 秒一行 CamPerf（Camera1 / Camera2 两条路共用）。
+     * 抽成方法是为了让两条采集路径打出【同一份口径】的日志，方便直接对比：
+     * 换路径前后看同一行数字就知道有没有变快。
+     */
+    private fun recordFrameStats(
+        frameStartNs: Long,
+        afterOrientNs: Long,
+        frameEndNs: Long,
+        cw: Int,
+        ch: Int,
+        api: String
+    ) {
+        // out = 真正发出去的帧率；cam = 相机送来的帧率；cb = HAL 叫我们的次数。
+        //   · cam≈30 而 out 低  → 我们处理慢（看 rotate/jpeg）
+        //   · cb≈30 而 cam 低   → 帧在取帧时被合并，回调线程来不及
+        //   · cb≈cam≈10         → 相机真的只出 10fps
+        perfFrames.increment()
+        perfRotateNs.add(afterOrientNs - frameStartNs)
+        perfJpegNs.add(frameEndNs - afterOrientNs)
+        perfTotalNs.add(frameEndNs - frameStartNs)
+
+        val winNs = synchronized(perfPrintLock) {
+            if (perfLastPrint == 0L) {
+                perfLastPrint = frameEndNs; 0L
+            } else if (frameEndNs - perfLastPrint >= 2_000_000_000L) {
+                val w = frameEndNs - perfLastPrint
+                perfLastPrint = frameEndNs
+                w
+            } else 0L
+        }
+        if (winNs <= 0L) return
+        val f = perfFrames.sumThenReset().coerceAtLeast(1)
+        val winMs = winNs / 1_000_000.0
+        val cam = perfCamArrived.sumThenReset()
+        val drop = perfDropped.sumThenReset()
+        val cb = perfCbInvoked.sumThenReset()
+        Log.i(
+            "CamPerf",
+            "api=" + api +
+                    " out=" + (f * 1000.0 / winMs).format1() + "fps" +
+                    " cam=" + (cam * 1000.0 / winMs).format1() + "fps" +
+                    " cb=" + (cb * 1000.0 / winMs).format1() + "fps" +
+                    " drop=" + drop +
+                    " conv=" + (perfConvNs.sumThenReset() / f / 1_000_000.0).format1() + "ms" +
+                    " rotate=" + (perfRotateNs.sumThenReset() / f / 1_000_000.0).format1() + "ms" +
+                    " jpeg=" + (perfJpegNs.sumThenReset() / f / 1_000_000.0).format1() + "ms" +
+                    " total=" + (perfTotalNs.sumThenReset() / f / 1_000_000.0).format1() + "ms" +
+                    " size=" + cw + "x" + ch
+        )
+    }
+
+    /**
+     * 【v3.9】Camera1 直连 HAL1 的采集路径（只给 LEGACY 设备用）。
+     * 与 Camera2 路径共用同一套下游：orientInto → nv21ToJpeg → emitOrdered → onFrame。
+     * 差别只有两处：① 回调直接给 NV21，不用再转；② 帧率用 HAL1 原生参数锁。
+     */
+    @Suppress("DEPRECATION")
+    private fun startCamera1(camId: String): String? {
+        val id = camId.toIntOrNull() ?: return "NO_CAMERA"
+
+        // Camera1 的回调会投递到【调用 open() 的那条线程的 Looper】上，
+        // 所以必须在后台线程里 open —— 否则每帧都砸在主线程上。
+        val thread = HandlerThread("cam1-bg")
+        thread.start()
+        cam1Thread = thread
+        cam1Handler = Handler(thread.looper)
+
+        var opened: android.hardware.Camera? = null
+        var openError: String? = null
+        val latch = CountDownLatch(1)
+        cam1Handler?.post {
+            opened = try {
+                android.hardware.Camera.open(id)
+            } catch (e: Exception) {
+                openError = "OPEN_ERROR"
+                null
+            }
+            latch.countDown()
+        }
+        if (!latch.await(3, TimeUnit.SECONDS) || opened == null) {
+            thread.quitSafely()
+            cam1Thread = null
+            cam1Handler = null
+            return openError ?: "OPEN_ERROR"
+        }
+        val cam = opened!!
+
+        // ── 参数：分辨率 / 格式 / 帧率 ──────────────────────────
+        // 全部来自设备支持表，尺寸由上层从能力清单挑好传进来，这里不替设备做主。
+        val params = cam.parameters
+        params.setPreviewSize(currentWidth, currentHeight)
+        params.previewFormat = ImageFormat.NV21
+
+        // 帧率：HAL1 的原生参数是"预览帧率区间"，单位 1/1000 fps。
+        // ① 优先 (target,target) 固定区间 —— 下限=上限时相机不许自己往下滑；
+        // ② 没有就挑"能容纳目标帧率"的里上界最高的；③ 再没有就挑上界最高的。
+        val want = currentFps * 1000
+        var chosen: IntArray? = null
+        val ranges = try {
+            params.supportedPreviewFpsRange
+        } catch (_: Exception) {
+            null
+        }
+        if (ranges != null && ranges.isNotEmpty()) {
+            for (r in ranges) {
+                if (r.size >= 2 && r[0] == want && r[1] == want) {
+                    chosen = r
+                    break
+                }
+            }
+            if (chosen == null) {
+                var best: IntArray? = null
+                for (r in ranges) {
+                    if (r.size < 2) continue
+                    if (r[0] <= want && want <= r[1]) {
+                        if (best == null || r[1] > best[1]) best = r
+                    }
+                }
+                if (best == null) {
+                    for (r in ranges) {
+                        if (r.size < 2) continue
+                        if (best == null || r[1] > best[1]) best = r
+                    }
+                }
+                chosen = best
+            }
+        }
+        if (chosen != null) {
+            params.setPreviewFpsRange(chosen[0], chosen[1])
+            Log.i(
+                "CamPerf",
+                "Camera1 fpsRange target=" + want + " chosen=(" +
+                    chosen[0] + "," + chosen[1] + ") all=" +
+                    (ranges?.joinToString(",") { "(${it[0]},${it[1]})" } ?: "?")
+            )
+        }
+        try {
+            cam.parameters = params
+        } catch (_: Exception) {
+            cam.release()
+            thread.quitSafely()
+            cam1Thread = null
+            cam1Handler = null
+            return "BAD_SIZE"
+        }
+
+        // HAL 有最终解释权：个别机器会把尺寸悄悄改成它支持的最近一档。
+        // 必须以【相机回读的实际尺寸】为准 —— 否则回调里 data 是 1280×720
+        // 而我们按 960×720 去采样，画面会直接错位/花屏。
+        try {
+            val actual = cam.parameters.previewSize
+            if (actual != null && (actual.width != currentWidth || actual.height != currentHeight)) {
+                Log.i(
+                    "CamPerf",
+                    "Camera1 尺寸被 HAL 调整：" + currentWidth + "x" + currentHeight +
+                            " → " + actual.width + "x" + actual.height + "（以实际为准）"
+                )
+                currentWidth = actual.width
+                currentHeight = actual.height
+            }
+        } catch (_: Exception) {
+            // 读不回来就按请求值走，绝大多数机器本来就一致
+        }
+
+        // Camera1 必须有个"预览承载"才能出帧，但我们不需要真的显示 ——
+        // 给一个离屏 SurfaceTexture，画面直接丢弃，不占界面也不额外拷贝。
+        try {
+            val st = SurfaceTexture(0)
+            cam1DummySurface = st // 持有引用，防 GC 回收（见字段注释）
+            cam.setPreviewTexture(st)
+        } catch (_: Exception) {
+            cam.release()
+            thread.quitSafely()
+            cam1Thread = null
+            cam1Handler = null
+            return "SESSION_FAILED"
+        }
+
+        // 预分配回调缓冲：不预分配的话 HAL 每帧 new 一个 ~1MB 数组 → GC 抖动。
+        val bufSize = currentWidth * currentHeight * 3 / 2
+        for (i in 0 until cam1BufferCount) cam.addCallbackBuffer(ByteArray(bufSize))
+
+        cam.setPreviewCallbackWithBuffer { data, camera ->
+            perfCbInvoked.increment()
+            if (inFlight.get() >= PIPELINE_WORKERS) {
+                // 流水线满了：这一帧放弃，但缓冲必须立刻还回去，
+                // 否则相机手里的缓冲越来越少 → 反过来把帧率压下去（背压）。
+                perfDropped.increment()
+                camera.addCallbackBuffer(data)
+                return@setPreviewCallbackWithBuffer
+            }
+            perfCamArrived.increment()
+            val seq = frameSeq.getAndIncrement()
+            inFlight.incrementAndGet()
+            compressExecutor.execute {
+                try {
+                    val frameStartNs = System.nanoTime()
+                    val deg = rotationNeededDegrees()
+                    val mirror = (currentFacing == "front")
+                    val cw = maxOf(currentWidth, currentHeight)
+                    val ch = minOf(currentWidth, currentHeight)
+                    val canvas = borrowCanvas(cw * ch * 3 / 2)
+                    val afterOrientNs: Long
+                    val jpeg: ByteArray
+                    try {
+                        // 注意：这里直接用回调给的 NV21（data），
+                        // 不再经过 yuvToNv21 —— Camera1 给的就是 NV21。
+                        orientInto(data, currentWidth, currentHeight, deg, mirror, cw, ch, canvas)
+                        afterOrientNs = System.nanoTime()
+                        jpeg = nv21ToJpeg(canvas, cw, ch, JPEG_QUALITY)
+                    } finally {
+                        returnCanvas(canvas)
+                    }
+                    val frameEndNs = System.nanoTime()
+                    emitOrdered(seq, jpeg)
+                    recordFrameStats(frameStartNs, afterOrientNs, frameEndNs, cw, ch, "C1")
+                } catch (_: Exception) {
+                    emitOrdered(seq, EMPTY_JPEG)
+                } finally {
+                    // 缓冲在【处理完之后】才还 —— 还早了相机会往这块内存里写下帧，
+                    // 正在读它的 orientInto 就会读到半新半旧的画面。
+                    camera.addCallbackBuffer(data)
+                    inFlight.decrementAndGet()
+                }
+            }
+        }
+
+        return try {
+            cam.startPreview()
+            cam1 = cam
+            running = true
+            null
+        } catch (_: Exception) {
+            cam.release()
+            thread.quitSafely()
+            cam1Thread = null
+            cam1Handler = null
+            "SESSION_FAILED"
+        }
+    }
+
+    /** Camera1 路径的清理（与 cleanup() 互不干扰：cam1 为空时全是空操作） */
+    @Suppress("DEPRECATION")
+    private fun cleanup1() {
+        try {
+            cam1?.setPreviewCallback(null)
+        } catch (_: Exception) {
+        }
+        try {
+            cam1?.stopPreview()
+        } catch (_: Exception) {
+        }
+        try {
+            cam1?.release()
+        } catch (_: Exception) {
+        }
+        cam1 = null
+        try {
+            cam1DummySurface?.release()
+        } catch (_: Exception) {
+        }
+        cam1DummySurface = null
+        try {
+            cam1Thread?.quitSafely()
+        } catch (_: Exception) {
+        }
+        cam1Thread = null
+        cam1Handler = null
     }
 
     /** 内部清理：按"请求→会话→设备→线程"的顺序逐层关好 */
