@@ -175,8 +175,12 @@ class MainActivity : FlutterActivity() {
     // 摄像头守护前台服务句柄
     private var camServiceStarted = false
 
+    // 【v3.11】Flutter 引擎句柄：预览纹理要从它的 renderer 上申请
+    // （TextureRegistry）。configureFlutterEngine 里赋值，那时引擎已就绪。
+    private var flutterEngineRef: io.flutter.embedding.engine.FlutterEngine? = null
+
     private fun engine(): CameraEngine {
-        return camEngine ?: CameraEngine(this).also { camEngine = it }
+        return camEngine ?: CameraEngine(this, flutterEngineRef?.renderer).also { camEngine = it }
     }
 
     private fun startCamGuardService() {
@@ -245,6 +249,8 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: io.flutter.embedding.engine.FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // 【v3.11】留住引擎：CameraEngine 要向它的 renderer 申请预览纹理
+        flutterEngineRef = flutterEngine
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -349,6 +355,14 @@ class MainActivity : FlutterActivity() {
                         runOnUiThread { camEventSink?.success(jpeg) }
                     }
                     result.success(err)
+                }
+                // 【v3.11】查询预览纹理的 id / 摆正方式 / 实际尺寸：
+                //   · 有 id → Dart 用 Texture(textureId) 直接采样 GPU 画面（零解码）
+                //   · 没有 → 这台机没走纹理通道，Dart 退回原来的 JPEG 解码预览
+                // 为什么单独开一个方法而不是塞进 startCamera 的返回值：
+                // 切镜头会重建纹理（id 变），Dart 侧要能在【任意时刻】重新查。
+                "getPreviewTextureId" -> {
+                    result.success(engine().previewTextureInfo() ?: mapOf("id" to -1L))
                 }
                 "stopCamera" -> {
                     engine().stop()

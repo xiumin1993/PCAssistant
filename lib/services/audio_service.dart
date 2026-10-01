@@ -72,7 +72,6 @@
 // 备注（不改代码）：flutter_lints 有个 unnecessary_import 规则，会在
 //   "A import 提供的类型已被 B import 转导出"时提示可以删掉 A。
 //   若 analyze 在这两行报提示，删掉多余那个即可，由作者处理。
-import 'dart:typed_data';
 import 'package:flutter/services.dart';
 
 /// 音频服务 - 接收 PCM 字节流并实时播放

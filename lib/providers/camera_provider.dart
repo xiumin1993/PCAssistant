@@ -294,6 +294,24 @@ class CameraProvider extends ChangeNotifier {
   /// 整页仍然只在【状态真的变了】时才重建（那本来就是低频事件）。
   /// ⚠ 帧刷新请一律用 previewFrame，**不要**改成 notifyListeners()。
   final ValueNotifier<Uint8List?> previewFrame = ValueNotifier(null);
+
+  /// 【v3.11】预览纹理 —— 相机画面直通 GPU 的那块纹理（含 id / 摆正方式 / 尺寸）。
+  ///
+  /// 有值时界面用 `Texture(textureId: id)` 显示预览：画面从 HAL 进 GPU，
+  /// 不经过 CPU 解码，也就没有"每秒 20 多次解一张 960×720 位图"的开销
+  /// （那正是预览卡顿的根源）。
+  /// null = 这台机没走纹理通道，界面退回原来的 `Image.memory` 解码预览。
+  ///
+  /// 为什么不是 final/常量：切镜头会重建纹理（id 变），停相机后纹理作废，
+  /// 所以每次开/切/停都要重新问原生一次（见 _refreshPreviewTexture）。
+  CamPreviewTexture? _previewTexture;
+  CamPreviewTexture? get previewTexture => _previewTexture;
+
+  /// 开相机 / 切镜头之后重新取一次预览纹理。
+  /// 取不到就置 null —— 界面据此自动退回 JPEG 解码预览，永远不会白屏。
+  Future<void> _refreshPreviewTexture() async {
+    _previewTexture = await _cameraService.previewTextureId();
+  }
   // "节流"（throttle）= 一段时间内只放行一次。间隔由 _previewThrottleMs 决定。
   // v3.8 之前这里写死 100ms —— 等于把本地预览锁死在 10fps，而相机明明在出 30fps，
   // 这是"界面看着卡"的最直接原因。现在改为跟随实际帧率（见 _previewThrottleMs）。
@@ -356,18 +374,24 @@ class CameraProvider extends ChangeNotifier {
         // 文本帧发 JSON 控制指令、二进制帧发音视频字节，同一个方法搞定。
         // 未连接时它会静默丢弃（见 network_service.dart 的 send），
         // 所以这里不必再判一次 isConnected；断线时相机也会被接线 2 关掉。
-        _previewJpeg = jpeg; // 留一份给界面画预览
-        final now = DateTime.now().millisecondsSinceEpoch;
+        // 【v3.11】预览走 GPU 纹理时，界面根本用不到 JPEG ——
+        // 那这一帧就只管上传 PC，一次都不惊动 UI 线程（连 ValueNotifier
+        // 都不通知，预览卡不再被每秒重建二十几次）。
+        // 只有"没拿到纹理通道"的老路径才照旧把帧递给 Image.memory 解码。
+        if (_previewTexture == null) {
+          _previewJpeg = jpeg; // 留一份给界面画预览
+          final now = DateTime.now().millisecondsSinceEpoch;
         // 取"从 1970-01-01 UTC 起算的毫秒数"，是整数，做减法比 DateTime
         // 对象轻便得多（这个回调一秒可能被叫 30 次，能省则省）。
         // v3.8：节流间隔跟随实际帧率（相机出多少帧，界面就刷多少帧），
         // 不再是写死的 100ms。相机一秒出 N 帧时每帧都刷 = 一秒重建 N 次界面，
         // 这个上限由 _previewThrottleMs 的 16ms 下限托底，不会失控。
-        if (now - _lastNotifyMs >= _previewThrottleMs) {
-          _lastNotifyMs = now;
-          // 【v3.8.4】只推给预览卡，不再 notifyListeners() 惊动整页
-          //（理由见 previewFrame 字段注释：整页重建是主线程 1.66 核的元凶）。
-          previewFrame.value = jpeg;
+          if (now - _lastNotifyMs >= _previewThrottleMs) {
+            _lastNotifyMs = now;
+            // 【v3.8.4】只推给预览卡，不再 notifyListeners() 惊动整页
+            //（理由见 previewFrame 字段注释：整页重建是主线程 1.66 核的元凶）。
+            previewFrame.value = jpeg;
+          }
         }
       }
     };
@@ -1042,6 +1066,8 @@ class CameraProvider extends ChangeNotifier {
       if (error != null) {
         _reportNativeError(error);
         _state = CamState.standby; // 起不来就退回待命，不算致命
+      } else {
+        await _refreshPreviewTexture(); // 【v3.11】重建后的预览纹理 id
       }
     } else if (_state != CamState.idle) {
       // 待命/登记中：硬件没开，只要把 PC 那边记的档位更新一下就行
@@ -1096,6 +1122,8 @@ class CameraProvider extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    // 【v3.11】相机起来了 → 取预览纹理 id，界面据此切到 GPU 直通预览
+    await _refreshPreviewTexture();
     _state = CamState.live;
     _setError(null);
     notifyListeners();
@@ -1111,6 +1139,9 @@ class CameraProvider extends ChangeNotifier {
     await _cameraService.stop();
     // 预览也要清掉：否则界面会留着最后一帧，看起来像"还在取景"的假画面
     _previewJpeg = null;
+    // 【v3.11】相机关了，那块预览纹理也被原生回收了 —— 必须一起作废，
+    // 否则界面会拿着一个已释放的 id 去采样（表现为黑屏或花屏）。
+    _previewTexture = null;
     // 这行的写法值得学：idle 是"彻底关闭"，不该被降级成 standby，
     // 所以要加条件；其它态（live/starting）都回 standby。
     if (_state != CamState.idle) _state = CamState.standby;
@@ -1165,6 +1196,8 @@ class CameraProvider extends ChangeNotifier {
       if (error != null) {
         _reportNativeError(error);
         _state = CamState.standby;
+      } else {
+        await _refreshPreviewTexture(); // 【v3.11】切镜头会重建纹理，id 会变
       }
       notifyListeners();
     }

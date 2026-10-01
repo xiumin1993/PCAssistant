@@ -47,6 +47,7 @@ import 'package:provider/provider.dart';
 // 所以界面里取出来后可以直接点方法调用，不用再补一个 !。
 import '../l10n/app_localizations.dart';
 import '../providers/camera_provider.dart';
+import '../services/camera_service.dart'; // CamPreviewTexture（v3.11 GPU 预览）
 import '../providers/device_provider.dart';
 import '../widgets/device_gate.dart';
 
@@ -145,6 +146,9 @@ class CameraScreen extends StatelessWidget {
                     valueListenable: provider.previewFrame,
                     builder: (context, jpeg, _) => _PreviewCard(
                       previewJpeg: jpeg,
+                      // 【v3.11】GPU 预览纹理：取到了就走零解码直通，
+                      // 取不到（老设备）自动退回解码 JPEG 的老路径。
+                      texture: provider.previewTexture,
                       isLive: isLive,
                       // 角标：真实读数（不是写死的样例数据）
                       stamp: isLive
@@ -509,18 +513,104 @@ class _OrientedFrame extends StatelessWidget {
   }
 }
 
+/// 【v3.11】预览纹理（GPU 直通版）：相机画面直接采样，不解码 JPEG。
+///
+/// 与 _OrientedFrame 摆正的规矩完全一致（同一套 orient 编码：
+/// 先旋转、后镜像），只是把"解码出来的图片"换成"一块 GPU 纹理"。
+///
+/// 为什么 Texture 外面要套 FittedBox + SizedBox：
+///   Texture 没有 fit 概念 —— 它会把纹理【拉伸填满】父容器，父容器比例
+///   和传感器比例不一致时画面就变形了。所以先给它一个"传感器原始比例"
+///   的固定盒子，再交给 FittedBox 按 contain/cover 缩放（多出来的部分
+///   留黑边或裁掉），这样任何屏幕比例下都不会变形。
+class _PreviewSurface extends StatelessWidget {
+  final CamPreviewTexture tex;
+  final BoxFit fit;
+
+  const _PreviewSurface({required this.tex, this.fit = BoxFit.contain});
+
+  @override
+  Widget build(BuildContext context) {
+    final surface = FittedBox(
+      fit: fit,
+      child: SizedBox(
+        width: tex.width.toDouble(),
+        height: tex.height.toDouble(),
+        child: Texture(textureId: tex.id),
+      ),
+    );
+    // 先转正：RotatedBox 在 GPU 合成阶段旋转一张纹理，几乎零成本
+    //（对比：在 CPU 上搬 69 万像素要 27ms/帧，这就是 v3.10 搬走的那一步）。
+    final rotated = RotatedBox(quarterTurns: tex.quarterTurns, child: surface);
+    // 再镜像 —— ⚠ 顺序不能反：镜像必须作用在【转正之后】的画面上。
+    return tex.mirror
+        ? Transform(
+            alignment: Alignment.center,
+            transform: Matrix4.diagonal3Values(-1.0, 1.0, 1.0),
+            child: rotated,
+          )
+        : rotated;
+  }
+}
+
 class _PreviewCard extends StatelessWidget {
   final Uint8List? previewJpeg;
+  /// 【v3.11】GPU 预览纹理。非 null 时优先用它（不解码 JPEG）；
+  /// null 表示这台机没走纹理通道，退回 previewJpeg 的解码预览。
+  final CamPreviewTexture? texture;
   final bool isLive;
   final String? stamp; // 角标文字（仅取景中显示）
   final VoidCallback onFullscreen;
 
   const _PreviewCard({
     required this.previewJpeg,
+    this.texture,
     required this.isLive,
     required this.stamp,
     required this.onFullscreen,
   });
+
+  /// 取景窗里到底画什么，按优先级三选一：
+  ///   ① 有 GPU 纹理 → 直接采样相机画面（v3.11，最省：不解码、不分配位图）
+  ///   ② 有 JPEG 帧 → 解码后显示（没有纹理通道时的老路径）
+  ///   ③ 都没有 → "未取景"占位（相机还没开/被冻结）
+  Widget _buildView(AppLocalizations l10n) {
+    final tex = texture;
+    if (tex != null) {
+      return _PreviewSurface(tex: tex, fit: BoxFit.contain);
+    }
+    if (previewJpeg == null) {
+      return ColoredBox(
+        color: Colors.black,
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.videocam_off, color: Colors.white24, size: 56),
+              const SizedBox(height: 8),
+              Text(
+                l10n.camPreviewOff,
+                style: const TextStyle(color: Colors.white38, fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    // LayoutBuilder：量出取景窗的【实际逻辑宽】，交给下面的
+    // cacheWidth 换算成物理像素 —— 解码尺寸跟着显示尺寸走。
+    return LayoutBuilder(
+      // 【v3.10】画面交给 _OrientedFrame：跳过方向标记字节，
+      // 用 RotatedBox/Transform 在 GPU 上摆正（手机不再做逐像素旋转）。
+      // cacheWidth 按"旋转后落在哪条轴"来算。
+      builder: (context, box) => _OrientedFrame(
+        frame: previewJpeg!,
+        fit: BoxFit.contain,
+        cacheWidth:
+            _previewDecodeWidth(context, box, _quarterTurns(previewJpeg!)),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -565,38 +655,7 @@ class _PreviewCard extends StatelessWidget {
                 children: [
                   AspectRatio(
                     aspectRatio: 4 / 3,
-                    child: previewJpeg == null
-                        ? ColoredBox(
-                            color: Colors.black,
-                            child: Center(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(Icons.videocam_off,
-                                      color: Colors.white24, size: 56),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    l10n.camPreviewOff,
-                                    style: const TextStyle(
-                                        color: Colors.white38, fontSize: 12),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          )
-                        // LayoutBuilder：量出取景窗的【实际逻辑宽】，交给下面的
-                        // cacheWidth 换算成物理像素 —— 解码尺寸跟着显示尺寸走。
-                        : LayoutBuilder(
-                            // 【v3.10】画面交给 _OrientedFrame：跳过方向标记字节，
-                            // 用 RotatedBox/Transform 在 GPU 上摆正（手机不再做
-                            // 逐像素旋转）。cacheWidth 按"旋转后落在哪条轴"来算。
-                            builder: (context, box) => _OrientedFrame(
-                              frame: previewJpeg!,
-                              fit: BoxFit.contain,
-                              cacheWidth: _previewDecodeWidth(
-                                  context, box, _quarterTurns(previewJpeg!)),
-                            ),
-                          ),
+                    child: _buildView(l10n),
                   ),
                   // 参数角标（左下角真实读数）
                   if (stamp != null)
@@ -721,15 +780,23 @@ class _FullscreenPreviewScreenState extends State<_FullscreenPreviewScreen> {
               // 帧刷新不再连累全屏页里的横幅、按钮一起重建。
               ValueListenableBuilder<Uint8List?>(
                 valueListenable: provider.previewFrame,
-                // 【v3.10】同预览卡：跳过方向标记字节并在 GPU 上摆正。
-                // 全屏页故意【不】传 cacheWidth —— cover 铺满是放大，
-                // 按屏幕宽度解码反而会先把图缩小、放大后发虚。
-                builder: (context, frame, _) => frame == null
-                    ? const Center(
-                        child: Icon(Icons.videocam_off,
-                            color: Colors.white24, size: 72),
-                      )
-                    : _OrientedFrame(frame: frame, fit: BoxFit.cover),
+                builder: (context, frame, _) {
+                  // 【v3.11】有 GPU 纹理 → 直通采样，cover 铺满整屏。
+                  // 纹理自己会刷新，这里只是借帧通道顺带触发重建，无额外成本。
+                  final tex = provider.previewTexture;
+                  if (tex != null) {
+                    return _PreviewSurface(tex: tex, fit: BoxFit.cover);
+                  }
+                  // 没纹理通道：退回老路径（跳过方向标记字节并在 GPU 上摆正）。
+                  // 全屏页故意【不】传 cacheWidth —— cover 铺满是放大，
+                  // 按屏幕宽度解码反而会先把图缩小、放大后发虚。
+                  return frame == null
+                      ? const Center(
+                          child: Icon(Icons.videocam_off,
+                              color: Colors.white24, size: 72),
+                        )
+                      : _OrientedFrame(frame: frame, fit: BoxFit.cover);
+                },
               ),
               // 顶部红色横幅（硬件开着才见）——避开刘海/圆角安全区。
               // 注意：Positioned 必须是 Stack 的【直接】子组件，

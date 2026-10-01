@@ -68,7 +68,7 @@
 
 // dart:async：StreamSubscription（水管订阅句柄的类型）。
 import 'dart:async';
-import 'dart:typed_data'; // Uint8List：JPEG 原始字节
+// Uint8List：JPEG 原始字节
 // 为什么 JPEG 要用 Uint8List 而不是 String：JPEG 是二进制，里面有 0x00 这种
 // 对文本无意义的字节；Uint8List 是内存里紧密排列的字节，能原样落盘/上网络。
 
@@ -165,6 +165,45 @@ class CamSizeCaps {
 
   Map<String, dynamic> toMap() =>
       {'width': width, 'height': height, 'maxFps': maxFps};
+}
+
+/// 【v3.11】一块"相机画面直通"的预览纹理。
+///
+/// 原生把相机预览接到 Flutter 的纹理上之后，界面用
+/// `Texture(textureId: id)` 就能把画面画出来 —— 全程不解码 JPEG。
+/// 这里额外带上"怎么摆正"和"纹理实际像素尺寸"：
+///   · orient —— 与上行 JPEG 的方向标记【同一套编码】（见原生 orientFlags）：
+///               纹理里是传感器原始朝向，得在 Dart 侧摆正；
+///   · width/height —— HAL 实际生效的采集尺寸（可能不是我们请求的那一档），
+///               用它算宽高比，画面才不会被拉伸。
+class CamPreviewTexture {
+  final int id;
+  final int orient;
+  final int width;
+  final int height;
+
+  const CamPreviewTexture({
+    required this.id,
+    required this.orient,
+    required this.width,
+    required this.height,
+  });
+
+  /// 需要【顺时针】转几个 90°（0~3），交给 RotatedBox(quarterTurns:)。
+  int get quarterTurns => orient & 0x3;
+
+  /// 是否还要水平镜像（前置镜头自拍视角）。
+  /// ⚠ 必须作用在【转正之后】的画面上（H∘R ≠ R∘H）。
+  bool get mirror => (orient & 0x4) != 0;
+
+  /// 纹理【摆正之后】的宽高比（宽/高）。
+  /// 转 90°/270° 会交换宽高，这里已经算进去了。
+  double get orientedAspectRatio {
+    final w = quarterTurns % 2 == 1 ? height.toDouble() : width.toDouble();
+    final h = quarterTurns % 2 == 1 ? width.toDouble() : height.toDouble();
+    if (h <= 0) return 4 / 3;
+    return w / h;
+  }
 }
 
 /// 摄像头采集服务
@@ -309,6 +348,34 @@ class CameraService {
     // 采集线程此后即使还在跑也推不出东西（省掉无谓的跨语言序列化）。
     _dataSub = null;
     await _channel.invokeMethod('stopCamera'); // 再让原生关设备、退线程
+  }
+
+  /// 【v3.11】查当前的预览纹理（GPU 直通预览用）。
+  ///
+  /// 返回值：
+  ///   · 非 null —— 原生把相机预览画面接到了一块 Flutter 纹理上，
+  ///                界面用 `Texture(textureId: id)` 直接采样，【不解码 JPEG】；
+  ///   · null    —— 这台机没走纹理通道（纹理申请失败等），
+  ///                界面退回原来的 `Image.memory` 解码预览。
+  ///
+  /// 为什么不是 start() 顺带返回：切换镜头会【重建】纹理（id 会变），
+  /// 所以上层在开相机、切镜头之后都要能重新问一次。
+  Future<CamPreviewTexture?> previewTextureId() async {
+    final info = await _channel.invokeMethod<Map>('getPreviewTextureId');
+    if (info == null) return null;
+    final id = info['id'];
+    if (id is! int || id <= 0) return null; // 原生用 -1 表示"没有纹理"
+    final orient = info['orient'];
+    final w = info['width'];
+    final h = info['height'];
+    return CamPreviewTexture(
+      id: id,
+      orient: orient is int ? orient : 0,
+      // 尺寸拿不到就按 4:3 兜底（相机最常见的比例），
+      // 只为算宽高比，不影响采集画质 —— 采集档位仍然是设备报的那一档。
+      width: w is int && w > 0 ? w : 4,
+      height: h is int && h > 0 ? h : 3,
+    );
   }
 
   /// 切换前/后置镜头（原生内部 stop→start 沿用当前画质）。

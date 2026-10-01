@@ -15,6 +15,7 @@ import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
+import io.flutter.view.TextureRegistry
 import android.util.Range
 import android.view.Surface
 import android.view.WindowManager
@@ -66,7 +67,16 @@ import java.util.concurrent.atomic.LongAdder
  * 瓶颈定位看 logcat 的 CamPerf 行（每 2 秒一条，含 cam 出帧率与 drop 丢帧数）。
  * ============================================================================
  */
-class CameraEngine(private val context: Context) {
+/**
+ * @param textureRegistry Flutter 的纹理注册表（来自 FlutterEngine.renderer）。
+ *   传进来之后，相机的预览画面会【直接】送到一块 GPU 纹理上，Flutter 用
+ *   Texture(textureId) 显示 —— 画面不经过 CPU 解码（详见 previewEntry 注释）。
+ *   传 null 也可以：那会退回"离屏空纹理"，预览只能走老的 JPEG 解码路径。
+ */
+class CameraEngine(
+    private val context: Context,
+    private val textureRegistry: TextureRegistry? = null
+) {
 
     companion object {
         // ======================================================================
@@ -150,7 +160,62 @@ class CameraEngine(private val context: Context) {
     // ⚠ 必须用一个字段【持有引用】：SurfaceTexture 靠 finalize 释放显存，
     // 只 new 出来不存的话随时可能被 GC 回收 → 相机拿到一个已释放的纹理，
     // 表现是"预览跑一会儿就报错/黑屏"，而且很难复现。
+    //
+    // 【v3.11】拿到 Flutter 纹理注册表后，这个"承载"不再是丢弃画面的黑洞，
+    // 而是一块 Flutter 能直接采样的 GPU 纹理（见 previewEntry）。只有注册表
+    // 不可用时才退回纯离屏的 SurfaceTexture（那时预览走老 JPEG 解码路径）。
     private var cam1DummySurface: SurfaceTexture? = null
+
+    // ══════════════════════════════════════════════════════════
+    // 【v3.11】预览走 GPU 纹理：彻底干掉"每帧解码一张 JPEG"
+    // ------------------------------------------------------------------
+    // 改之前预览的链路是这样的（每帧都要全走一遍）：
+    //   HAL 出 NV21 → CPU 压 JPEG(51ms) → 传到 Dart → 【Dart 解码成
+    //   960×720 的 RGBA 位图（约 2.7MB）】→ 再缩放 → 上传纹理 → 下一帧丢弃。
+    // 每秒 24 次 × 2.7MB 位图分配，A53 上光解码就吃掉一个核，还带 GC 抖动 ——
+    // 这就是"预览看着卡"的根源（采集那边的帧率数字反而是正常的）。
+    //
+    // 改之后：HAL → GPU 纹理 → Flutter 光栅化。相机本来就要往某个 Surface 送
+    // 预览帧（Camera1 不挂承载根本不出帧），我们只是把那个"丢弃画面的黑洞"
+    // 换成 Flutter 注册的纹理 —— 【硬件多做的事为零】，省掉的是整套
+    //   JPEG 编码 → 跨线程传输 → Dart 解码 → 位图分配 → GC
+    // 预览帧率从此不再受 JPEG 编码(51ms/帧)拖累，也不再跟采集抢 CPU。
+    //
+    // 方向不在这里处理：纹理里是传感器原始朝向，摆正交给 Dart 的
+    // RotatedBox/Transform（GPU 合成，免费），与 PC 端 orient 标记同源。
+    // ══════════════════════════════════════════════════════════
+    private var previewEntry: TextureRegistry.SurfaceTextureEntry? = null
+
+    /**
+     * 当前预览纹理的 id，交给 Dart 的 Texture(textureId:) 显示。
+     * 返回 null = 这台机没走纹理通道，Dart 侧要退回 JPEG 解码的老预览。
+     */
+    fun previewTextureId(): Long? = previewEntry?.id()
+
+    /**
+     * 【v3.11】预览纹理的"使用说明书"：id + 摆正方式 + 实际像素尺寸。
+     * 一次把三样一起给 Dart，省三次跨语言调用，也保证三个值同源
+     * （都是相机这一刻的状态，不会因为分多次调用而读到中间态）。
+     *
+     *   id     —— Texture(textureId:) 用
+     *   orient —— 与上行 JPEG 的方向标记【同一套编码】（见 orientFlags）：
+     *             bit0~1 顺时针转几个 90°，bit2 是否水平镜像。
+     *             纹理里是传感器原始朝向，摆正交给 Dart 的 RotatedBox/Transform，
+     *             在 GPU 合成阶段完成，与 PC 端 orient 的逻辑一致。
+     *   w/h    —— 【HAL 回读之后的实际尺寸】：个别机器会把请求尺寸悄悄改成
+     *             最近的一档，用它算宽高比才不会被拉伸。
+     *
+     * 返回 null = 没有纹理通道。
+     */
+    fun previewTextureInfo(): Map<String, Any>? {
+        val entry = previewEntry ?: return null
+        return mapOf(
+            "id" to entry.id(),
+            "orient" to orientFlags(),
+            "width" to currentWidth,
+            "height" to currentHeight,
+        )
+    }
     /** 回调缓冲数量：够 PIPELINE_WORKERS 帧同时在飞 + 相机自己手里再拿几张 */
     private val cam1BufferCount = PIPELINE_WORKERS + 3
 
@@ -542,9 +607,17 @@ class CameraEngine(private val context: Context) {
         val sessionLatch = CountDownLatch(1)
         var sessionOk = false
         val device = cameraDevice!!
+        // 【v3.11】把预览纹理一并挂进会话：相机同时往"取帧柜(ImageReader)"和
+        // "预览纹理"送同一批帧，后者由 GPU 直接采样 —— Dart 侧不再解码 JPEG。
+        // 拿不到纹理时列表里就只有取帧柜，行为与改动前完全一致。
+        val previewSt = acquirePreviewTexture(currentWidth, currentHeight)
+        val targets = ArrayList<Surface>(2).apply {
+            add(reader.surface)
+            if (previewSt != null) add(Surface(previewSt))
+        }
         @Suppress("DEPRECATION")
         device.createCaptureSession(
-            listOf(reader.surface),
+            targets,
             object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     captureSession = session
@@ -875,11 +948,12 @@ class CameraEngine(private val context: Context) {
             // 读不回来就按请求值走，绝大多数机器本来就一致
         }
 
-        // Camera1 必须有个"预览承载"才能出帧，但我们不需要真的显示 ——
-        // 给一个离屏 SurfaceTexture，画面直接丢弃，不占界面也不额外拷贝。
+        // Camera1 必须有个"预览承载"才能出帧。
+        // 【v3.11】优先挂 Flutter 注册的纹理 —— 画面直通 GPU，预览零解码；
+        // 注册表不可用时才退回离屏空纹理（那时预览走 Dart 侧 JPEG 解码）。
         try {
-            val st = SurfaceTexture(0)
-            cam1DummySurface = st // 持有引用，防 GC 回收（见字段注释）
+            val st = acquirePreviewTexture(currentWidth, currentHeight)
+                ?: SurfaceTexture(0).also { cam1DummySurface = it }
             cam.setPreviewTexture(st)
         } catch (_: Exception) {
             cam.release()
@@ -939,6 +1013,42 @@ class CameraEngine(private val context: Context) {
         }
     }
 
+    /**
+     * 【v3.11】申请一块 Flutter 预览纹理（尺寸按当前实际生效的采集尺寸）。
+     * 返回 null 表示"这场没有纹理通道"，调用方应退回离屏承载。
+     *
+     * 尺寸要用【HAL 回读之后的实际尺寸】：个别机器会把请求的尺寸悄悄改成
+     * 它支持的最近一档，纹理缓冲尺寸对不上会造成画面拉伸/裁切。
+     */
+    private fun acquirePreviewTexture(w: Int, h: Int): SurfaceTexture? {
+        val reg = textureRegistry ?: return null
+        return try {
+            releasePreviewTexture()
+            val entry = reg.createSurfaceTexture()
+            previewEntry = entry
+            val st = entry.surfaceTexture()
+            // 必须显式声明缓冲尺寸：不设的话部分 HAL 会按默认的小尺寸写入，
+            // Flutter 端看到的就是一张被拉伸/裁切的画面。
+            st.setDefaultBufferSize(w, h)
+            Log.i("CamPerf", "预览纹理就绪 id=" + entry.id() + " " + w + "x" + h)
+            st
+        } catch (e: Exception) {
+            // 纹理拿不到不是致命错误 —— 预览退回 JPEG 解码路径，采集照常
+            Log.w("CamPerf", "预览纹理创建失败，退回 JPEG 预览: " + e)
+            releasePreviewTexture()
+            null
+        }
+    }
+
+    /** 释放预览纹理（切换镜头/停止采集时调用；entry 已被置空则为空操作） */
+    private fun releasePreviewTexture() {
+        try {
+            previewEntry?.release()
+        } catch (_: Exception) {
+        }
+        previewEntry = null
+    }
+
     /** Camera1 路径的清理（与 cleanup() 互不干扰：cam1 为空时全是空操作） */
     @Suppress("DEPRECATION")
     private fun cleanup1() {
@@ -960,6 +1070,7 @@ class CameraEngine(private val context: Context) {
         } catch (_: Exception) {
         }
         cam1DummySurface = null
+        releasePreviewTexture() // 【v3.11】预览纹理也要还回去
         try {
             cam1Thread?.quitSafely()
         } catch (_: Exception) {
@@ -977,6 +1088,7 @@ class CameraEngine(private val context: Context) {
         cameraDevice = null
         try { imageReader?.close() } catch (_: Exception) {}
         imageReader = null
+        releasePreviewTexture() // 【v3.11】预览纹理也要还回去
         // 退出后台线程。quitSafely：把手头消息跑完再退，不丢中间状态
         try { bgThread?.quitSafely() } catch (_: Exception) {}
         bgThread = null
@@ -1145,7 +1257,7 @@ class CameraEngine(private val context: Context) {
      *   bit0~1 = 需要【顺时针】转几个 90°（0~3）
      *   bit2   = 1 表示还要水平镜像（前置镜头自拍视角）
      */
-    private fun orientFlags(): Int {
+    fun orientFlags(): Int {
         val q = rotationNeededDegrees() / 90
         return (q and 0x3) or (if (currentFacing == "front") 0x4 else 0)
     }
