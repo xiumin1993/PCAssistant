@@ -152,6 +152,14 @@ design/shots/
 .flutter-plugins
 
 # --------------------------------
+# libjpeg-turbo 源码（11MB，只在重建预编译库时才需要）
+# --------------------------------
+# 日常构建只用 android/app/src/main/cpp/prebuilt/ 里的 .a（已入库），
+# 源码由 build_libjpeg_turbo.sh 自动下载，不必进仓库。
+android/app/src/main/cpp/libjpeg-turbo/
+android/app/src/main/cpp/_build_ljt*/
+
+# --------------------------------
 # 敏感信息（可选）
 # --------------------------------
 .env

@@ -1073,9 +1073,18 @@ class CameraEngine(
                     val frameStartNs = System.nanoTime()
                     // 注意：这里直接用回调给的 NV21（data），不再经过 yuvToNv21
                     // —— Camera1 给的就是 NV21。
-                    val jpeg = nv21ToJpeg(data, currentWidth, currentHeight, JPEG_QUALITY)
+                    //
+                    // 【v3.13】优先让原生一次产出"方向标记 + JPEG"：标记字节直接
+                    // 写进缓冲区头部，省掉下面 withOrientTag 那次整帧拷贝
+                    // （720p 一帧约 100 KB，24 fps 就是每秒 2.4 MB 白拷 + 一次
+                    // 数组分配）。拿不到才走老的「编码 + 再套标记」两步。
+                    val payload = JpegCodec.tryEncodeTagged(
+                        data, currentWidth, currentHeight, JPEG_QUALITY, orientFlags()
+                    ) ?: withOrientTag(
+                        nv21ToJpeg(data, currentWidth, currentHeight, JPEG_QUALITY)
+                    )
                     val frameEndNs = System.nanoTime()
-                    emitOrdered(seq, withOrientTag(jpeg))
+                    emitOrdered(seq, payload)
                     recordFrameStats(frameStartNs, frameEndNs, currentWidth, currentHeight, "C1")
                 } catch (_: Exception) {
                     emitOrdered(seq, EMPTY_JPEG)
@@ -1388,9 +1397,17 @@ class CameraEngine(
 
     /**
      * NV21 → JPEG 字节数组。
-     * YuvImage 是 Android 自带的编码器（系统层用 libjpeg-turbo）。
+     *
+     * 【v3.13】优先走原生 libjpeg-turbo（NEON 加速，见 JpegCodec 的说明）。
+     * 它比下面这条 YuvImage 路径快 3~6 倍 —— 这一步原本是整条采集链路里
+     * 最贵的一环（720p 上 50~90 ms/帧），也是帧率上不去的直接原因。
+     *
+     * 原生拿不到结果（so 缺失 / 自检不过 / 尺寸奇数 / 编码报错）时
+     * 一律退回 YuvImage：慢一点，但绝不会因为引了原生库就出不了画面。
      */
     private fun nv21ToJpeg(nv21: ByteArray, w: Int, h: Int, quality: Int): ByteArray {
+        JpegCodec.tryEncode(nv21, w, h, quality)?.let { return it }
+
         val yuv = YuvImage(nv21, ImageFormat.NV21, w, h, null)
         val baos = ByteArrayOutputStream(w * h / 4) // 预分配 1/4 面积，减少扩容
         yuv.compressToJpeg(Rect(0, 0, w, h), quality, baos)
