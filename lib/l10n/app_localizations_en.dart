@@ -343,6 +343,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get camAutoHighest => 'Auto (highest)';
 
   @override
+  String get camCodec => 'Encoding';
+
+  @override
+  String get camCodecAuto => 'Auto (clearest the hardware allows)';
+
+  @override
+  String get camCodecActual => 'In use: ';
+
+  @override
   String camRotate(int deg) {
     return 'Rotate $deg°';
   }

@@ -158,12 +158,30 @@ class MainActivity : FlutterActivity() {
                         val width = call.argument<Int>("width") ?: 640
                         val height = call.argument<Int>("height") ?: 480
                         val fps = call.argument<Int>("fps") ?: 30
+                        // 【v3.16】codec 由 Flutter 指定：null = 自动（按硬件挑最清楚的）
+                        val codec = call.argument<String>("codec")
+                        engine().selectCodec(codec)
                         val err = engine().start(facing, width, height, fps) { jpeg ->
-                            // 采集线程回调来一帧 JPEG → EventChannel 推给 Flutter（主线程）
+                            // 采集线程回调来一帧 → EventChannel 推给 Flutter（主线程）
                             runOnUiThread { camEventSink?.success(jpeg) }
                         }
                         result.success(err)
                     }
+                    // 【v3.16】这台机在给定画质下可用的编码方式（按清晰度从高到低）
+                    "getCodecOptions" -> result.success(
+                        engine().availableCodecs(
+                            call.argument<Int>("width") ?: 1280,
+                            call.argument<Int>("height") ?: 720,
+                            call.argument<Int>("fps") ?: 30
+                        )
+                    )
+                    // 切换编码方式；传 null = 回到自动。
+                    // 返回 null=成功，非空=失败原因（设备不支持时链路自动留在 JPEG）
+                    "setCodec" -> result.success(
+                        engine().selectCodec(call.argument<String>("codec"))
+                    )
+                    // 当前实际在用的编码方式（"JPEG" / "H264" / "H265"）
+                    "getCodec" -> result.success(engine().currentCodec())
                     // 【v3.11】查询预览纹理的 id / 摆正方式 / 实际尺寸：
                     //   · 有 id → Dart 用 Texture(textureId) 直接采样 GPU 画面（零解码）
                     //   · 没有 → 这台机没走纹理通道，Dart 退回原来的 JPEG 解码预览

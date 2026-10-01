@@ -1,9 +1,10 @@
 package com.pcspeaker.pc_speaker
 
 import android.util.Log
+import java.nio.ByteBuffer
 
 /**
- * 原生 JPEG 编码器 —— libjpeg-turbo（带 NEON 加速），JNI 封装。
+ * 原生图像加速层 —— libjpeg-turbo（JPEG 编码）+ NEON 像素格式转换，JNI 封装。
  *
  * ### 为什么要有它
  * 采集链路里最贵的一步就是把相机给的 NV21 压成 JPEG。Android 自带的
@@ -11,10 +12,14 @@ import android.util.Log
  * 吃掉一个核，帧率被编码卡住而不是被相机卡住（相机本身能给到 30 fps）。
  * libjpeg-turbo 的 DCT/Huffman 有 AArch64 NEON 实现，同样画质通常快 3~6 倍。
  *
+ * 【v3.16】另外提供 NV21 → NV12 的转换：硬件编码器（MediaCodec）要的是 NV12，
+ * 而相机给的是 NV21，两者只差色度交错顺序 —— 这一步同样用 NEON 做。
+ *
  * ### 健壮性
  * 这个类是"可选加速"：任何一步失败（so 没打进包、指令集不兼容、自检没过、
- * 编码报错）都返回 null，调用方退回原来的 `YuvImage` 路径。**永远不会因为
- * 引入了原生库而开不了相机** —— 引库是提速，不是加依赖。
+ * 编码报错）都返回 null，调用方退回原来的 `YuvImage` 路径；NV21→NV12 也有
+ * Kotlin 标量兜底。**永远不会因为引入了原生库而开不了相机** ——
+ * 引库是提速，不是加依赖。
  */
 object JpegCodec {
     private const val TAG = "JpegCodec"
@@ -109,5 +114,75 @@ object JpegCodec {
             warned = true
             Log.w(TAG, "原生编码失败，改用 YuvImage：${e.message}")
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // NV21 → NV12（给 MediaCodec 硬件编码器喂数据）
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 把 NV21 转成 NV12 写进 [dst]（必须是用 `allocateDirect` 直接缓冲，
+     * JNI 侧才能拿到裸指针做零拷贝）。成功返回 1。
+     */
+    private external fun nv21ToNv12(
+        nv21: ByteArray, dst: ByteBuffer, dstCap: Int, width: Int, height: Int
+    ): Int
+
+    /** Kotlin 兜底用的色度暂存（只在 so 缺失时才走这条路，按尺寸分配一次） */
+    @Volatile
+    private var uvScratch: ByteArray? = null
+
+    /**
+     * NV21 → NV12。转换完成后 [dst] 的 position=0、limit=帧大小，可直接喂给编码器。
+     *
+     * 原生优先；so 缺失或转换失败时退回 Kotlin 标量实现 —— 慢，但保证
+     * "硬件编码"这条路不会因为少了原生库就整体不可用（那会逼着整条链路退回 JPEG）。
+     */
+    fun tryNv21ToNv12(
+        nv21: ByteArray, dst: ByteBuffer, width: Int, height: Int
+    ): Boolean {
+        if (width <= 0 || height <= 0) return false
+        if (width and 1 != 0 || height and 1 != 0) return false
+        val ySize = width * height
+        val frame = ySize + ySize / 2
+        if (nv21.size < frame || dst.capacity() < frame) return false
+
+        if (ensure()) {
+            try {
+                if (nv21ToNv12(nv21, dst, dst.capacity(), width, height) == 1) {
+                    dst.limit(frame)
+                    dst.position(0)
+                    return true
+                }
+            } catch (e: Throwable) {
+                warnOnce(e)
+            }
+        }
+        return nv21ToNv12Fallback(nv21, dst, ySize, frame)
+    }
+
+    /** 标量兜底：Y 整段拷，色度逐对交换。只在原生不可用时才跑。 */
+    private fun nv21ToNv12Fallback(
+        nv21: ByteArray, dst: ByteBuffer, ySize: Int, frame: Int
+    ): Boolean {
+        val uvLen = ySize / 2
+        var scratch = uvScratch
+        if (scratch == null || scratch.size < uvLen) {
+            scratch = ByteArray(uvLen)
+            uvScratch = scratch
+        }
+        var i = ySize
+        var j = 0
+        while (i + 1 < frame) {
+            scratch[j++] = nv21[i + 1] // U
+            scratch[j++] = nv21[i]     // V
+            i += 2
+        }
+        dst.clear()
+        dst.put(nv21, 0, ySize)
+        dst.put(scratch, 0, uvLen)
+        dst.limit(frame)
+        dst.position(0)
+        return true
     }
 }

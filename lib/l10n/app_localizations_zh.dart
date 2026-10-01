@@ -317,6 +317,15 @@ class AppLocalizationsZh extends AppLocalizations {
   String get camAutoHighest => '自动（最高档）';
 
   @override
+  String get camCodec => '编码方式';
+
+  @override
+  String get camCodecAuto => '自动（硬件允许的最清晰）';
+
+  @override
+  String get camCodecActual => '当前实际：';
+
+  @override
   String camRotate(int deg) {
     return '旋转 $deg°';
   }

@@ -294,6 +294,9 @@ class CameraService {
     required int width,
     required int height,
     required int fps,
+    /// 【v3.16】编码方式：null = 自动（原生按硬件能力挑清晰度最高的那种）。
+    /// 具体值取自 [codecOptions] 返回的列表（'JPEG' / 'H264' / 'H265'）。
+    String? codec,
   }) async {
     if (isRunning) return null; // 幂等：已在跑不重复启动
 
@@ -313,6 +316,7 @@ class CameraService {
       'width': width,
       'height': height,
       'fps': fps,
+      'codec': codec,
     });
     if (error != null) return error;
 
@@ -360,6 +364,48 @@ class CameraService {
   ///
   /// 为什么不是 start() 顺带返回：切换镜头会【重建】纹理（id 会变），
   /// 所以上层在开相机、切镜头之后都要能重新问一次。
+
+  // ==========================================================================
+  // 【v3.16】编码方式
+  // ==========================================================================
+  // 上行画面的压缩格式不再只有 JPEG：设备有硬件编码器的情况下，
+  // H.264 / H.265 在同码率下明显更清楚（或同画质省 2~3 倍码率）。
+  // 这里三件事：① 问设备有哪些可选 ② 让用户选 ③ 问当前实际在用哪个。
+  //
+  // 为什么"可选列表"要带上画质档位一起问：硬件编码器对分辨率/帧率有门槛
+  //（某些 SoC 的 HEVC 编码器不接受过小的尺寸），档位一变结论就变。
+
+  /// 这台机在给定画质下【可用】的编码方式，按清晰度从高到低排好。
+  /// 列表最后一位永远是 'JPEG'（软件编码，任何设备都能跑，是兜底）。
+  Future<List<String>> codecOptions({
+    required int width,
+    required int height,
+    required int fps,
+  }) async {
+    final list = await _channel.invokeMethod<List<dynamic>>('getCodecOptions', {
+      'width': width,
+      'height': height,
+      'fps': fps,
+    });
+    if (list == null) return const ['JPEG'];
+    final out = list.whereType<String>().toList();
+    // 兜底：原生万一返回空（探测异常），至少给 JPEG，界面下拉框不会空白
+    return out.isEmpty ? const ['JPEG'] : out;
+  }
+
+  /// 切换编码方式。传 null = 回到自动（按硬件挑最清楚的）。
+  /// 返回 null = 成功；非空 = 失败原因（设备不支持时链路会自动留在 JPEG）。
+  Future<String?> setCodec(String? codec) async {
+    return _channel.invokeMethod<String>('setCodec', {'codec': codec});
+  }
+
+  /// 当前实际在用的编码方式（'JPEG' / 'H264' / 'H265'）。
+  /// 它可能与用户选的不同 —— 选了 H265 但设备起不来时会降级，
+  /// 界面显示要以这个"实际值"为准。
+  Future<String> currentCodec() async {
+    return await _channel.invokeMethod<String>('getCodec') ?? 'JPEG';
+  }
+
   Future<CamPreviewTexture?> previewTextureId() async {
     final info = await _channel.invokeMethod<Map>('getPreviewTextureId');
     if (info == null) return null;

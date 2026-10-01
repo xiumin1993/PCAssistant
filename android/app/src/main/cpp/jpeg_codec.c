@@ -182,6 +182,73 @@ Java_com_pcspeaker_pc_1speaker_JpegCodec_encodeTagged(JNIEnv *env, jclass clazz,
     return do_encode(env, nv21, width, height, quality, orient & 0xFF);
 }
 
+/* ============================================================================
+ * NV21 → NV12：给 MediaCodec 硬件编码器用的输入格式转换
+ *
+ * 相机给的是 NV21：Y 满平面 + 交错的 (V,U) 半平面。
+ * 硬件编码器要的是 NV12：Y 满平面 + 交错的 (U,V) 半平面。
+ * 两者的 Y 平面逐字节相同，色度部分只是每一对字节的顺序反了 ——
+ * 所以转换就是"把每对相邻字节交换一下"，Y 平面纯 memcpy。
+ *
+ * NEON 写法：NV21 的排布是 V,U,V,U...，vld2q_u8 一次读 32 字节正好把它拆成
+ *   val[0]=16 个 V、val[1]=16 个 U；再以 (U,V) 的顺序 vst2q_u8 写回去，
+ *   得到的就是 NV12 的 (U,V),(U,V)... 一次处理 32 字节，两个通道各 16 字节。
+ *
+ * 之所以写进输出缓冲而不是原地改输入：输入是相机的 callback buffer，
+ * 编码线程要异步用它（MediaCodec 有自己的输入缓冲），原地改会让相机
+ * 下一帧的缓冲内容被我们改乱。
+ * ==========================================================================*/
+
+static void vu_to_uv(const unsigned char *src, unsigned char *dst, size_t n) {
+    size_t i = 0;
+#if HAVE_NEON
+    for (; i + 32 <= n; i += 32) {
+        uint8x16x2_t vu = vld2q_u8(src + i);   /* val[0]=V, val[1]=U */
+        uint8x16x2_t uv;
+        uv.val[0] = vu.val[1];                 /* 先写 U */
+        uv.val[1] = vu.val[0];                 /* 后写 V */
+        vst2q_u8(dst + i, uv);
+    }
+#endif
+    /* 收尾（不足 32 字节的部分）+ 无 NEON 的 ABI 走标量 */
+    for (; i + 2 <= n; i += 2) {
+        dst[i] = src[i + 1];
+        dst[i + 1] = src[i];
+    }
+}
+
+/* 返回 1 = 转换完成，0 = 参数/缓冲不合格（调用方请回退或丢帧）。
+ * dst 必须是【直接】ByteBuffer：GetDirectBufferAddress 能拿到裸指针，零拷贝；
+ * dstCap 由 Kotlin 侧传入容量，JNI 这边没有查询容量的 API，只能让调用方告诉我们。 */
+JNIEXPORT jint JNICALL
+Java_com_pcspeaker_pc_1speaker_JpegCodec_nv21ToNv12(JNIEnv *env, jclass clazz,
+                                                     jbyteArray nv21,
+                                                     jobject dst, jint dstCap,
+                                                     jint width, jint height) {
+    (void)clazz;
+    if (width <= 0 || height <= 0) return 0;
+    if ((width & 1) || (height & 1)) return 0; /* 4:2:0 半平面要求偶数 */
+    if (nv21 == NULL || dst == NULL) return 0;
+
+    const size_t y_size = (size_t)width * (size_t)height;
+    const size_t frame = y_size + y_size / 2;
+    if ((size_t)dstCap < frame) return 0;
+    if ((*env)->GetArrayLength(env, nv21) < (jsize)frame) return 0;
+
+    unsigned char *out = (unsigned char *)(*env)->GetDirectBufferAddress(env, dst);
+    if (out == NULL) return 0; /* 不是直接缓冲 —— 说明上层用错了类型 */
+
+    jbyte *src = (*env)->GetByteArrayElements(env, nv21, NULL);
+    if (src == NULL) return 0;
+
+    memcpy(out, src, y_size);
+    vu_to_uv((const unsigned char *)src + y_size, out + y_size, y_size / 2);
+
+    /* JNI_ABORT：我们只读了输入，不需要把（可能存在的）拷贝写回 Java 数组 */
+    (*env)->ReleaseByteArrayElements(env, nv21, src, JNI_ABORT);
+    return 1;
+}
+
 /* 自检：库加载后先编一张最小的图，确认 NEON/turbojpeg 真能跑。
  * 返回 1 = 可用，0 = 不可用（上层会退回 YuvImage）。 */
 JNIEXPORT jint JNICALL

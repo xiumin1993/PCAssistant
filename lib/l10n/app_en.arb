@@ -132,6 +132,9 @@
   "camNoModes": "No usable mode for the current lens",
   "camProbing": "Probing… (reads the modes this phone supports once the PC connects)",
   "camAutoHighest": "Auto (highest)",
+  "camCodec": "Encoding",
+  "camCodecAuto": "Auto (clearest the hardware allows)",
+  "camCodecActual": "In use: ",
   "camRotate": "Rotate {deg}°",
   "@camRotate": {
     "placeholders": {

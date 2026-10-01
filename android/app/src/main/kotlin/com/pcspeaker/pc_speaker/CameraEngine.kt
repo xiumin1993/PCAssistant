@@ -11,6 +11,8 @@ import com.pcspeaker.pc_speaker.camera.CameraOrientation
 import com.pcspeaker.pc_speaker.camera.CameraState
 import com.pcspeaker.pc_speaker.camera.FramePipeline
 import com.pcspeaker.pc_speaker.camera.PreviewTexture
+import com.pcspeaker.pc_speaker.camera.VideoCodec
+import com.pcspeaker.pc_speaker.camera.VideoCodecCaps
 import io.flutter.view.TextureRegistry
 
 /**
@@ -57,6 +59,12 @@ class CameraEngine(
     /** 帧的出口。切镜头时要先记住它，stop→start 之后接着用 */
     private var frameConsumer: ((ByteArray) -> Unit)? = null
 
+    /**
+     * Flutter 指定的编码方式。null = 【自动】——按硬件能力选清晰度最高的那种。
+     * 界面下拉框里选了具体值就记在这里；下次开相机沿用。
+     */
+    private var requestedCodec: VideoCodec? = null
+
     val isRunning: Boolean get() = state.running
 
     /** 当前镜头朝向："back" 或 "front"（Flutter 层据此显示切换按钮文案） */
@@ -99,6 +107,20 @@ class CameraEngine(
         // 由 Dart 侧传下来的 maxFps 驱动（"换个手机就自动跟着变"）。
         // 这里只做数值合法性收边（1~240），不再替设备做主。
         state.fps = fps.coerceIn(1, 240)
+
+        // 【v3.16】选编码方式：没手动指定就按硬件能力挑清晰度最高的那个
+        //（available() 已按 H.265 > H.264 > JPEG 排好序）。
+        // 拿不到硬件编码器时 useCodec 自己会退回 JPEG 并给出原因，
+        // 这里只把结果打进日志 —— 编码方式失败【绝不】连累开相机。
+        val picked = requestedCodec
+            ?: VideoCodecCaps.available(width, height, state.fps).first()
+        val codecErr = pipeline.useCodec(picked, width, height, state.fps)
+        Log.i(
+            "CamPerf",
+            "编码方式 请求=" + (requestedCodec?.name ?: "自动") +
+                    " 选中=" + pipeline.codec.name +
+                    if (codecErr == null) "" else " 降级原因=$codecErr"
+        )
 
         // 第一步：按朝向找到相机 id（"0" 通常是后置，"1" 前置，但不保证，
         // 正确做法是遍历 characteristics 比对 LENS_FACING）
@@ -158,6 +180,37 @@ class CameraEngine(
         return state.facing
     }
 
+    // ══════════════════════════════════════════════════════════════
+    // 编码方式（v3.16）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 这台机在给定画质下【可用】的编码方式，按清晰度从高到低排好。
+     * 界面下拉框直接用这个列表（JPEG 永远在最后一位，是软件兜底）。
+     */
+    fun availableCodecs(width: Int, height: Int, fps: Int): List<String> =
+        VideoCodecCaps.available(width, height, fps).map { it.name }
+
+    /** 当前实际在用的编码方式名（"JPEG" / "H264" / "H265"） */
+    fun currentCodec(): String = pipeline.codec.name
+
+    /**
+     * 指定编码方式。传 null = 回到自动（按硬件能力选最高的）。
+     * 返回 null = 成功；非空 = 失败原因（比如设备不支持，链路会自动留在 JPEG）。
+     *
+     * 正在采集时切换也是允许的：编码器会重建，中间一两帧可能为空（发空帧占位），
+     * 不会中断采集。
+     */
+    fun selectCodec(name: String?): String? {
+        requestedCodec = if (name == null) null
+        else VideoCodec.entries.firstOrNull { it.name == name } ?: return "未知编码方式"
+        if (!state.running) return null // 没在采集：记下来，start 时生效
+
+        val target = requestedCodec
+            ?: VideoCodecCaps.available(state.width, state.height, state.fps).first()
+        return pipeline.useCodec(target, state.width, state.height, state.fps)
+    }
+
     /** 停止采集并释放所有相机资源（幂等：没开就直接返回） */
     fun stop() {
         if (!state.running && !cam2.isActive() && !cam1.isActive()) {
@@ -170,6 +223,9 @@ class CameraEngine(
         pipeline.enabled = false
         cam2.stop()
         cam1.stop() // 【v3.9】Camera1 路径也要关（没开过是空操作）
+        // 硬件编码器也要一起停：它是按当前分辨率/帧率建的，留着没意义，
+        // 而且占着 SoC 的编码资源。下次 start 会按新的画质重建。
+        pipeline.releaseEncoder()
         pipeline.consumer = null
         frameConsumer = null
     }

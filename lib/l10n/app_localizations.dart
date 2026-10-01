@@ -692,6 +692,24 @@ abstract class AppLocalizations {
   /// **'Auto (highest)'**
   String get camAutoHighest;
 
+  /// No description provided for @camCodec.
+  ///
+  /// In en, this message translates to:
+  /// **'Encoding'**
+  String get camCodec;
+
+  /// No description provided for @camCodecAuto.
+  ///
+  /// In en, this message translates to:
+  /// **'Auto (clearest the hardware allows)'**
+  String get camCodecAuto;
+
+  /// No description provided for @camCodecActual.
+  ///
+  /// In en, this message translates to:
+  /// **'In use: '**
+  String get camCodecActual;
+
   /// No description provided for @camRotate.
   ///
   /// In en, this message translates to:

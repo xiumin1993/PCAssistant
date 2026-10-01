@@ -108,6 +108,15 @@ class CameraScreen extends StatelessWidget {
           // 保证 value 一定在 items 里，否则 DropdownButton 会断言崩溃。
           final qualityValue = selIdx >= 0 ? '$selIdx' : 'auto';
 
+          // 【v3.16】编码方式下拉框的当前值。
+          // provider.codec 为 null 表示"自动"；但它可能记着一个【这台机已经不支持】
+          // 的值（换手机、或档位变了导致能力变化），那时必须回落到 'auto' ——
+          // 否则 DropdownButton 的 value 找不到对应项，框架直接断言崩溃。
+          final codec = provider.codec;
+          final codecValue = (codec != null && provider.codecOptions.contains(codec))
+              ? codec
+              : 'auto';
+
           // 参数能不能改：只有【已禁用】才锁死。
           // 待命/未连接都放开 —— 用户原话："我理解任何时候都可以修改摄像头清晰度"。
           final paramsLocked = !provider.enabled;
@@ -300,6 +309,56 @@ class CameraScreen extends StatelessWidget {
 
                           const SizedBox(height: 12),
 
+                          // ── 编码方式（v3.16）──
+                          // 上行画面的压缩格式。以前只有 JPEG（软件编码），
+                          // 现在设备有硬件编码器时可以走 H.264 / H.265：
+                          // 同码率下明显更清楚，或同画质省 2~3 倍码率。
+                          // 选项来自【设备自己上报的能力】（见 VideoCodecCaps），
+                          // 不是写死的名单 —— 换手机列表自动跟着变。
+                          Text(l10n.camCodec,
+                              style: const TextStyle(
+                                  fontSize: 12, color: Colors.black54)),
+                          const SizedBox(height: 4),
+                          DropdownButton<String>(
+                            isExpanded: true,
+                            // null 表示"自动"，它对应下面的 'auto' 那一项
+                            value: codecValue,
+                            items: [
+                              DropdownMenuItem(
+                                value: 'auto',
+                                child: Text(l10n.camCodecAuto,
+                                    style: const TextStyle(fontSize: 14)),
+                              ),
+                              for (final c in provider.codecOptions)
+                                DropdownMenuItem(
+                                  value: c,
+                                  // 技术名词（JPEG / H.264 / H.265）不翻译，
+                                  // 中英文界面都一样，也方便对着日志排查
+                                  child: Text(_codecLabel(c),
+                                      style: const TextStyle(fontSize: 14)),
+                                ),
+                            ],
+                            onChanged: (v) {
+                              if (v == null) return;
+                              // 'auto' → 传 null 给原生，让它按硬件能力自己挑
+                              provider.selectCodec(v == 'auto' ? null : v);
+                            },
+                          ),
+                          // 显示【实际】在用的：选了 H.265 但编码器起不来时会降级，
+                          // 不显示的话用户会以为选了却没生效。
+                          if (provider.activeCodec != 'JPEG' ||
+                              provider.codecOptions.length > 1)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 2),
+                              child: Text(
+                                l10n.camCodecActual + _codecLabel(provider.activeCodec),
+                                style: const TextStyle(
+                                    fontSize: 11.5, color: Colors.black38),
+                              ),
+                            ),
+
+                          const SizedBox(height: 12),
+
                           // ── 镜头 + 旋转 ──
                           // 以前相机没开就置灰，理由是"切镜头只对正在取景有意义"。
                           // 这是错的：待命时预设好镜头，等电脑一唤醒就直接用对的镜头，
@@ -467,6 +526,17 @@ bool _needsMirror(Uint8List frame) => (_orientFlags(frame) & 0x4) != 0;
 /// 跳过方向标记字节，取真正的 JPEG。
 /// sublistView 返回的是【视图】而不是副本 —— 每帧几十 KB 不产生额外拷贝。
 Uint8List _jpegView(Uint8List frame) => Uint8List.sublistView(frame, 1);
+
+/// 【v3.16】编码方式的显示名。
+///
+/// 原生给的是 'JPEG' / 'H264' / 'H265'（与帧头里的编号一一对应），
+/// 界面显示成更常见的写法。技术名词不翻译 —— 中英文界面一致，
+/// 也方便用户对着日志里的 `编码方式 选中=H264` 对上号。
+String _codecLabel(String code) => switch (code) {
+      'H264' => 'H.264',
+      'H265' => 'H.265 / HEVC',
+      _ => code, // 'JPEG' 及其它未知值原样显示
+    };
 
 /// 一帧画面（带方向标记）→ 摆正后的图片。预览卡与全屏页共用。
 class _OrientedFrame extends StatelessWidget {

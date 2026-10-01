@@ -132,6 +132,9 @@
   "camNoModes": "当前镜头暂无可用档位",
   "camProbing": "探测中…（连上电脑后自动读取手机支持的档位）",
   "camAutoHighest": "自动（最高档）",
+  "camCodec": "编码方式",
+  "camCodecAuto": "自动（硬件允许的最清晰）",
+  "camCodecActual": "当前实际：",
   "camRotate": "旋转 {deg}°",
   "@camRotate": {
     "placeholders": {

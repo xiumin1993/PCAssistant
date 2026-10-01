@@ -84,6 +84,7 @@ import 'dart:typed_data'; // Uint8List / BytesBuilder：拼帧头用
 // （它定义在 flutter/foundation 里，material 会顺带导出）。
 // 之所以 import material 而不是 foundation，是项目统一的省事写法。
 import 'package:flutter/material.dart'; // ChangeNotifier 所在
+import 'package:shared_preferences/shared_preferences.dart';
 
 // 服务层：CameraService 是"原生相机的 Dart 遥控器"（MethodChannel/EventChannel），
 // NetworkService 是"WebSocket 收发器"。Provider 夹在中间做调度。
@@ -313,6 +314,84 @@ class CameraProvider extends ChangeNotifier {
     _previewTexture = await _cameraService.previewTextureId();
   }
 
+  // ══════════════════════════════════════════════════════════════════
+  // 【v3.16】编码方式（JPEG / H.264 / H.265）
+  // ══════════════════════════════════════════════════════════════════
+  // 上行画面以前只有一种压缩格式（JPEG，软件编码）。现在设备有硬件编码器时
+  // 可以走 H.264 / H.265：同码率下明显更清楚，或用同样的画质省 2~3 倍码率。
+  //
+  // 三个值要分清：
+  //   _codec        —— 【用户意图】下拉框选的那个。null = 自动。
+  //   _codecOptions —— 【设备能力】这台机在当前画质下能跑哪几种（按清晰度降序）。
+  //   _activeCodec  —— 【实际结果】原生此刻真在用的。可能与 _codec 不同：
+  //                    选了 H265 但编码器起不来时会降级，界面要显示实际值。
+
+  /// 持久化键：用户选过的编码方式（下次开 App 沿用）
+  static const String _kCodecPref = 'cam_codec';
+
+  /// 用户选的编码方式。null = 【自动】—— 由原生按硬件能力挑清晰度最高的。
+  String? _codec;
+  String? get codec => _codec;
+
+  /// 可用的编码方式，按清晰度从高到低。末尾永远是 'JPEG'（软件兜底）。
+  List<String> _codecOptions = const ['JPEG'];
+  List<String> get codecOptions => _codecOptions;
+
+  /// 原生实际在用的编码方式（'JPEG' / 'H264' / 'H265'）
+  String _activeCodec = 'JPEG';
+  String get activeCodec => _activeCodec;
+
+  /// 读回上次的选择。只在初始化时调一次，失败就保持自动（不影响任何功能）。
+  Future<void> _loadCodecPref() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final v = prefs.getString(_kCodecPref);
+      if (v != null && v.isNotEmpty) _codec = v;
+    } catch (_) {
+      // 读偏好失败无所谓：最多是回到自动选择，不会有任何功能损失
+    }
+  }
+
+  /// 重新问一次"这台机在当前画质下能跑哪些编码方式"。
+  ///
+  /// 必须带档位一起问：硬件编码器对分辨率/帧率有门槛，档位一变结论就变。
+  /// 用户之前选的若已不在列表里（换了手机、或档位变了）→ 自动回到"自动"。
+  Future<void> _refreshCodecOptions() async {
+    if (!profileKnown) return; // 档位还没探到，问了也没意义
+    final opts = await _cameraService.codecOptions(
+      width: _selWidth,
+      height: _selHeight,
+      fps: _selFps,
+    );
+    _codecOptions = opts;
+    if (_codec != null && !opts.contains(_codec)) _codec = null;
+  }
+
+  /// 切换编码方式。传 null = 回到自动（按硬件挑最清楚的）。
+  ///
+  /// 取景中切换会立刻生效（原生重建编码器，中间一两帧可能为空，不会断流）；
+  /// 非取景态只记账，下次开相机时使用。
+  Future<void> selectCodec(String? codec) async {
+    _codec = codec;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (codec == null) {
+        await prefs.remove(_kCodecPref);
+      } else {
+        await prefs.setString(_kCodecPref, codec);
+      }
+    } catch (_) {
+      // 存不下只是"下次不记得"，本次选择照样生效
+    }
+    if (_state == CamState.live) {
+      final err = await _cameraService.setCodec(codec);
+      if (err != null) _reportNativeError(err);
+      // 以原生回的"实际值"为准：选了 H265 但起不来时会降级成别的
+      _activeCodec = await _cameraService.currentCodec();
+    }
+    notifyListeners();
+  }
+
   /// 【v3.12】屏幕横竖变了之后，重新问一次"画面该怎么摆正"。
   ///
   /// 为什么需要：摆正角度 = 传感器安装角 + 手机当前持握方向，进全屏会强制
@@ -367,6 +446,8 @@ class CameraProvider extends ChangeNotifier {
   // 谁 new 它：main.dart 里的 ChangeNotifierProvider<CameraProvider>(create: ...)。
   CameraProvider({required NetworkService networkService})
       : _networkService = networkService {
+    // 【v3.16】读回上次选的编码方式（读不到就保持"自动"，不影响任何功能）
+    _loadCodecPref();
     // 【接线 1：JPEG 帧 → 加魔术头发 WebSocket + 刷本地预览】
     // onFrame 是 CameraService 暴露的一个"回调槽"（类型是函数：
     // void Function(Uint8List jpeg)?）。这里把一个匿名函数（lambda）塞进去，
@@ -852,7 +933,10 @@ class CameraProvider extends ChangeNotifier {
     try {
       _caps = await _cameraService.getCapabilities();
       _pickBestProfile(); // 按当前镜头挑最高档
-      notifyListeners(); // 档位表到了 → 下拉框该刷新
+      // 【v3.16】档位定下来之后才能问"这台机能硬件编码哪些格式" ——
+      // 硬件编码器对分辨率/帧率有门槛，档位一变结论就变。
+      await _refreshCodecOptions();
+      notifyListeners(); // 档位表与编码方式都到了 → 下拉框该刷新
     } catch (_) {
       // 探失败：留个机会下次再探（比如下次进待命时）。
       // 注意这里【不编档位】—— _selWidth/Height/Fps 保持 0，
@@ -1077,6 +1161,8 @@ class CameraProvider extends ChangeNotifier {
         width: _selWidth,
         height: _selHeight,
         fps: _selFps,
+        // 【v3.16】null = 让原生按硬件能力自动挑（见 selectCodec 的说明）
+        codec: _codec,
       );
       // CameraService 的错误约定（原生侧同规则）：
       // start 返回 Future<String?> —— null = 成功；非 null 是错误码字符串。
@@ -1131,6 +1217,7 @@ class CameraProvider extends ChangeNotifier {
       width: _selWidth,
       height: _selHeight,
       fps: _selFps,
+      codec: _codec,
     );
     if (error != null) {
       // 失败不退回 idle 而是回 standby：会话还在册，PC 下次说"我要看"还能再试。
@@ -1142,6 +1229,9 @@ class CameraProvider extends ChangeNotifier {
     }
     // 【v3.11】相机起来了 → 取预览纹理 id，界面据此切到 GPU 直通预览
     await _refreshPreviewTexture();
+    // 【v3.16】以原生回的"实际在用"为准：选了 H265 但编码器起不来时会降级，
+    // 界面显示这个实际值，用户才知道真实情况（而不是以为选了却没生效）。
+    _activeCodec = await _cameraService.currentCodec();
     _state = CamState.live;
     _setError(null);
     notifyListeners();
@@ -1210,12 +1300,17 @@ class CameraProvider extends ChangeNotifier {
         width: _selWidth,
         height: _selHeight,
         fps: _selFps,
+        // 【v3.16】null = 让原生按硬件能力自动挑（见 selectCodec 的说明）
+        codec: _codec,
       );
       if (error != null) {
         _reportNativeError(error);
         _state = CamState.standby;
       } else {
         await _refreshPreviewTexture(); // 【v3.11】切镜头会重建纹理，id 会变
+        // 【v3.16】档位可能跟着镜头变了 → 可用的编码方式也会变，重问一次
+        await _refreshCodecOptions();
+        _activeCodec = await _cameraService.currentCodec();
       }
       notifyListeners();
     }
