@@ -312,6 +312,24 @@ class CameraProvider extends ChangeNotifier {
   Future<void> _refreshPreviewTexture() async {
     _previewTexture = await _cameraService.previewTextureId();
   }
+
+  /// 【v3.12】屏幕横竖变了之后，重新问一次"画面该怎么摆正"。
+  ///
+  /// 为什么需要：摆正角度 = 传感器安装角 + 手机当前持握方向，进全屏会强制
+  /// 转成横屏、退出又转回竖屏，角度是跟着变的。但纹理是在开相机那一刻建的，
+  /// 它的 orient 不会自己更新 —— 不重问一次，全屏画面就会歪着。
+  ///
+  /// 只有摆正方式【真的变了】才通知界面重建，避免无意义的刷新。
+  Future<void> refreshPreviewOrient() async {
+    if (_previewTexture == null) return; // 没走纹理通道就无所谓
+    final t = await _cameraService.previewTextureId();
+    if (t == null) return;
+    final old = _previewTexture!;
+    if (t.orient != old.orient || t.id != old.id) {
+      _previewTexture = t;
+      notifyListeners();
+    }
+  }
   // "节流"（throttle）= 一段时间内只放行一次。间隔由 _previewThrottleMs 决定。
   // v3.8 之前这里写死 100ms —— 等于把本地预览锁死在 10fps，而相机明明在出 30fps，
   // 这是"界面看着卡"的最直接原因。现在改为跟随实际帧率（见 _previewThrottleMs）。

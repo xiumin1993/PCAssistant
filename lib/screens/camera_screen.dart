@@ -513,6 +513,32 @@ class _OrientedFrame extends StatelessWidget {
   }
 }
 
+/// 【v3.12】横竖屏切换时，让 Provider 重新问一次"画面该怎么摆正"。
+///
+/// 摆正角度 = 传感器安装角 + 手机当前持握方向。进全屏会强制转横屏、
+/// 退出又转回竖屏，这个角度是跟着变的；但纹理在开相机那一刻就建好了，
+/// 它的 orient 不会自己更新 —— 不重问一次，全屏画面就会歪着。
+///
+/// 刷新排到"这一帧画完之后"再异步做，不在 build 里 await（build 必须是同步的）。
+/// 只有摆正方式真的变了 Provider 才会 notifyListeners，所以不会循环重建。
+class _OrientSync extends StatelessWidget {
+  final Widget child;
+  const _OrientSync({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return OrientationBuilder(
+      builder: (context, _) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!context.mounted) return;
+          context.read<CameraProvider>().refreshPreviewOrient();
+        });
+        return child;
+      },
+    );
+  }
+}
+
 /// 【v3.11】预览纹理（GPU 直通版）：相机画面直接采样，不解码 JPEG。
 ///
 /// 与 _OrientedFrame 摆正的规矩完全一致（同一套 orient 编码：
@@ -617,7 +643,8 @@ class _PreviewCard extends StatelessWidget {
     // 卡片自己也取一次 l10n：它是独立 StatelessWidget，
     // 拿不到父页 builder 里的局部变量，但文案表是全局的，取一次很便宜。
     final l10n = AppLocalizations.of(context);
-    return ClipRRect(
+    return _OrientSync(
+      child: ClipRRect(
       borderRadius: BorderRadius.circular(16),
       child: ColoredBox(
         // 黑色底：图片按 contain 显示时左右/上下的留白也是黑的，像正经取景器。
@@ -703,6 +730,7 @@ class _PreviewCard extends StatelessWidget {
           ),
         ),
       ),
+      ),
     );
   }
 }
@@ -767,7 +795,10 @@ class _FullscreenPreviewScreenState extends State<_FullscreenPreviewScreen> {
       // 全屏页：外层 Consumer 只负责"状态类"重建（横幅文案等低频变化），
       // 逐帧画面交给下面的 ValueListenableBuilder 单独订阅 previewFrame ——
       // 与主页面同一套做法（理由见主页面预览卡处的 v3.8.4 注释）。
-      body: Consumer<CameraProvider>(
+      // 【v3.12】_OrientSync：全屏会强制横屏，摆正角度跟着变，
+      // 由它通知 Provider 重新问一次 orient（否则画面是歪的）。
+      body: _OrientSync(
+        child: Consumer<CameraProvider>(
         builder: (context, provider, child) {
           final l10n = AppLocalizations.of(context);
           // Stack = 叠放：非 Positioned 的子组件从底铺起，Positioned 的钉角落。
@@ -846,6 +877,7 @@ class _FullscreenPreviewScreenState extends State<_FullscreenPreviewScreen> {
             ],
           );
         },
+      ),
       ),
     );
   }

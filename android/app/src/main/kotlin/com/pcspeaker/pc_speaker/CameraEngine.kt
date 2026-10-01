@@ -17,6 +17,7 @@ import android.os.HandlerThread
 import android.util.Log
 import io.flutter.view.TextureRegistry
 import android.util.Range
+import android.util.Size
 import android.view.Surface
 import android.view.WindowManager
 import java.io.ByteArrayOutputStream
@@ -99,10 +100,17 @@ class CameraEngine(
         private val PIPELINE_WORKERS = (CPU_COUNT / 2).coerceIn(1, 4)
 
         /**
-         * JPEG 质量。60 是"网络流"的通用甜点值：肉眼够用、体积适中，
-         * 且与机器性能无关（编码耗时主要跟分辨率正相关，跟质量弱相关）。
+         * JPEG 质量。
+         *
+         * 【v3.12】60 → 75。理由：清晰度是用户明确抱怨的点，而 60 在
+         * 720p 上已经能看到明显的块效应（尤其画面里有文字、网格、树叶时）。
+         * 代价算过账：编码耗时跟质量只是【弱相关】（主要跟分辨率正相关），
+         * 实测 ~1.2 核 → ~1.5 核；每帧体积 40~60KB → 80~110KB，
+         * 24fps 下约 2.4MB/s，局域网 WiFi 远没到瓶颈。
+         * 真要是带宽吃紧，正确做法是调低【画质档位】（界面下拉框），
+         * 而不是让每一档都糊。
          */
-        private const val JPEG_QUALITY = 60
+        private const val JPEG_QUALITY = 75
 
         /** 占位用的空帧：某帧处理失败时用它顶上，防止保序队列卡死 */
         private val EMPTY_JPEG = ByteArray(0)
@@ -285,6 +293,54 @@ class CameraEngine(
     /** 读当前手动偏移角（Flutter 查询/恢复按钮文案用） */
     fun manualRotationDegrees(): Int = manualRotation
 
+    /** Camera1 探测结果：设备自报的预览尺寸表 + 自报的帧率上界（fps） */
+    private data class Cam1Caps(val sizes: List<Size>, val maxFps: Int)
+
+    /**
+     * 【v3.12】用 Camera1 直接问设备：这颗镜头能跑哪些预览尺寸、最高多少帧。
+     *
+     * 只给 HAL1(LEGACY) 设备用 —— 那些机器上 Camera2 是兼容层，清单不可信
+     * （本机实测：Camera2 最大只报 960×720，设备真实能力是 1280×720）。
+     *
+     * 返回 null 表示"问不到"（没权限 / 相机正被占用 / HAL 怪癖），
+     * 调用方会回退到 Camera2 的清单 —— 探测失败不影响开相机，只是档位表
+     * 可能不全，绝不会因此开不了摄像头。
+     *
+     * ⚠ 必须在【相机没被占用】时问：Camera1 的 open 是独占的，采集进行中
+     * 再 open 会抛异常（这里 catch 住返回 null）。所以只在 App 刚连上、
+     * 还没开硬件的探测阶段调用（Dart 侧 ensureCaps 只探一次，见 _capsReady）。
+     */
+    @Suppress("DEPRECATION")
+    private fun camera1Caps(camId: String): Cam1Caps? {
+        val idx = camId.toIntOrNull() ?: return null
+        // 没授权就不碰硬件 —— 免得在某些 ROM 上弹异常日志甚至崩溃
+        if (context.checkSelfPermission(android.Manifest.permission.CAMERA) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) return null
+
+        var cam: android.hardware.Camera? = null
+        return try {
+            cam = android.hardware.Camera.open(idx)
+            val p = cam.parameters
+            val sizes = p.supportedPreviewSizes?.map { Size(it.width, it.height) }
+            // 帧率：HAL1 用"千分之一 fps"为单位的区间表，取所有区间的最大上界
+            var hi = 0
+            val ranges = p.supportedPreviewFpsRange
+            if (ranges != null) {
+                for (r in ranges) if (r.size >= 2 && r[1] > hi) hi = r[1]
+            }
+            if (sizes.isNullOrEmpty()) null else Cam1Caps(sizes, hi / 1000)
+        } catch (e: Exception) {
+            Log.i("CamPerf", "Camera1 能力探测不可用（$camId）：" + e.javaClass.simpleName)
+            null
+        } finally {
+            try {
+                cam?.release()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     // ══════════════════════════════════════════════════════════
     // 能力探测：告诉 PC "这台手机最高能开什么画质"
     // ══════════════════════════════════════════════════════════
@@ -329,12 +385,45 @@ class CameraEngine(
                 } catch (_: Exception) {
                     // 拿不到就保持 0，下面会退到常量
                 }
-                val deviceMaxFps = if (aeHi > 0) aeHi else 30
+                // 【v3.12】先问设备：这颗头的 Camera2 是真 HAL 还是兼容层？
+                // LEGACY → 下面是 framework 模拟出来的 Camera2，尺寸表不可信，
+                // 要改用 Camera1 的参数表（见 camera1Caps）。
+                val level = try {
+                    ch.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
+                } catch (_: Exception) {
+                    null
+                }
+                val legacy =
+                    level == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY
+
+                // ── 【v3.12】HAL1(LEGACY) 设备改用 Camera1 的尺寸表 ──────────
+                // 实测本机：Camera2 的 YUV 清单最大只报 960×720，而设备真实的
+                // `preview-size-values` 最大是 1280×720 —— 于是"自动最高档"
+                // 选出来的其实是次高档，画面白白少 33% 像素（这就是"清晰度差"
+                // 的根因）。原因：HAL1 设备上 Camera2 只是 framework 的兼容层，
+                // 它给的 stream configuration map 并不等于硬件真正能跑的预览尺寸。
+                // 我们本来就走 Camera1 采集，直接用 Camera1 的
+                // supportedPreviewSizes —— 同样是【设备自己上报】的，且就是
+                // 采集中真实生效的那张参数表，最准。拿不到就照旧用 Camera2 清单。
+                val c1 = if (legacy) camera1Caps(id) else null
+                // 帧率同理：HAL1 的 supportedPreviewFpsRange 比兼容层的
+                // AE_TARGET_FPS_RANGES 更贴近实际能锁住的帧率。
+                val deviceMaxFps = when {
+                    c1 != null && c1.maxFps > 0 -> c1.maxFps
+                    aeHi > 0 -> aeHi
+                    else -> 30
+                }
 
                 // 取设备给的尺寸清单。正常情况下 YUV_420_888 一定有；
                 // 万一某台机器报空，退到"预览尺寸表"（SurfaceTexture）——
                 // 那同样是设备自己声明的，不是我们编的。
-                var yuvSizes = map.getOutputSizes(ImageFormat.YUV_420_888)
+                var yuvSizes: Array<Size>? = null
+                if (c1 != null && c1.sizes.isNotEmpty()) {
+                    yuvSizes = c1.sizes.toTypedArray()
+                }
+                if (yuvSizes.isNullOrEmpty()) {
+                    yuvSizes = map.getOutputSizes(ImageFormat.YUV_420_888)
+                }
                 if (yuvSizes.isNullOrEmpty()) {
                     yuvSizes = map.getOutputSizes(SurfaceTexture::class.java)
                 }
