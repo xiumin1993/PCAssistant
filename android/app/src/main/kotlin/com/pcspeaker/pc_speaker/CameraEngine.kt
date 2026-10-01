@@ -152,6 +152,13 @@ class CameraEngine(private val context: Context) {
     private val perfRotateNs = LongAdder()      // 方向补偿累计耗时
     private val perfJpegNs = LongAdder()        // JPEG 编码累计耗时
     private val perfTotalNs = LongAdder()       // 单帧进流水线到出 JPEG 的墙钟耗时
+    // 【v3.8.5】onImageAvailable 被回调的【原始次数】（取帧之前就计数）。
+    // 它和 perfCamArrived 的差值能一锤定音地区分两种完全不同的瓶颈：
+    //   · cb ≈ cam ≈ 10fps → 相机 HAL 真的只出 10fps，改我们自己的代码没用，
+    //     只能靠降分辨率（Dart 侧自适应降档）绕开；
+    //   · cb ≈ 30fps 而 cam ≈ 10fps → 帧在到达时被 acquireLatestImage 合并掉了
+    //     （回调线程来不及取），瓶颈在回调线程，是代码问题、可修。
+    private val perfCbInvoked = LongAdder()
     private val perfCamArrived = LongAdder()    // 【v3.8.2】相机实际送到采集线程的帧数
     private val perfConvNs = LongAdder()        // 【v3.8.4】YUV→NV21 拷贝累计耗时
     private val perfDropped = LongAdder()       // 【v3.8.2】因流水线占满而被丢掉的帧数
@@ -448,6 +455,8 @@ class CameraEngine(private val context: Context) {
         // 相当于跟相机"约好：帧统一送到 ImageReader 这个取件柜"。
         val reader = imageReader!!
         reader.setOnImageAvailableListener({ r ->
+            // 【v3.8.5】先记"HAL 叫了我几次"，取帧成功与否都算（见字段注释）
+            perfCbInvoked.increment()
             // v3.8.4：占满判断挪到【取帧之前】—— 原来先取出再判断，
             // 等于每次都白拿一张（还占着一个取件柜槽位）。
             if (inFlight.get() >= PIPELINE_WORKERS) {
@@ -536,10 +545,12 @@ class CameraEngine(private val context: Context) {
                         val winMs = winNs / 1_000_000.0
                         val cam = perfCamArrived.sumThenReset()
                         val drop = perfDropped.sumThenReset()
+                        val cb = perfCbInvoked.sumThenReset()
                         Log.i(
                             "CamPerf",
                             "out=" + (f * 1000.0 / winMs).format1() + "fps" +
                                     " cam=" + (cam * 1000.0 / winMs).format1() + "fps" +
+                                    " cb=" + (cb * 1000.0 / winMs).format1() + "fps" +
                                     " drop=" + drop +
                                     " conv=" + (perfConvNs.sumThenReset() / f / 1_000_000.0)
                                 .format1() + "ms" +
@@ -588,12 +599,33 @@ class CameraEngine(private val context: Context) {
             return "SESSION_FAILED"
         }
 
-        // 第六步：发出"持续预览"请求（repeating request）。
-        // TEMPLATE_PREVIEW 是低延迟预览模板；
-        // 锁定自动曝光帧率范围，让相机尽量按目标 fps 出帧。
+        // 第六步：发出"持续出帧"请求（repeating request）。
+        // 【v3.8.4 关键】模板由 TEMPLATE_PREVIEW 改为 TEMPLATE_RECORD。
+        // 为什么改：实测（Redmi 4X / 骁龙 435，960×720）相机稳定只给 ~11fps，
+        // 而三个"想当然"的解释全被数据排除：
+        //   · 环境由暗转亮 → 帧率纹丝不动（11.7 → 10.6，甚至略降），
+        //     排除"暗光下自动曝光拉长"；
+        //   · 把 conv 从 44ms 优化到 8.8ms、4 条车道理论吞吐 50fps →
+        //     帧率仍 11fps 且 drop=0，排除"我们处理慢造成背压"；
+        //   · CamPerf 日志已确认下发的就是 AE 区间 (30,30)。
+        // 剩下最吻合的解释：PREVIEW 模板下 HAL 会做【自动帧率/省电优化】，
+        // 把输出压到 10~15fps。这对"给眼睛看预览"够用，对我们要【持续上行
+        // 30fps 给 PC 当摄像头】的场景却是致命的。RECORD 模板才是为持续
+        // 录像/推流设计的，会锁定目标帧率。
         try {
-            val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+            val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
             builder.addTarget(reader.surface)
+            // 再把"这是录像/推流"明确告诉 HAL：有些 HAL 光看模板还不够，
+            // CAPTURE_INTENT 是它判断场景的另一个依据（录像场景通常不再降帧）。
+            // 设不了就算了（个别老设备没这个 key），绝不能因此打不开相机。
+            try {
+                builder.set(
+                    CaptureRequest.CONTROL_CAPTURE_INTENT,
+                    CameraCharacteristics.CONTROL_CAPTURE_INTENT_VIDEO_RECORD
+                )
+            } catch (_: Exception) {
+                // 不支持就算了，模板本身已经切到 RECORD
+            }
             // v3.8：以前这里写 Range(currentFps, currentFps) —— 意思是
             // "强制相机只跑这一个帧率"。当时 currentFps 被封死在 30 以内，没问题；
             // 现在帧率改成跟着设备走了（可能是 60 / 120），再这么写就危险：
@@ -610,6 +642,28 @@ class CameraEngine(private val context: Context) {
             } catch (_: Exception) {
                 null
             }
+            // 【v3.8.5】把这颗镜头的 Camera2 支持级别打出来。
+            // LEGACY / LIMITED 的老设备（如骁龙 435 时代的机型）HAL 通常不吃
+            // AE 帧率区间这套控制，帧率由老 HAL 自己定 —— 这类机器上"下发了
+            // (30,30) 却只给 10fps"是常态，只能靠降分辨率绕开，别再改请求参数。
+            val level = try {
+                cameraManager.getCameraCharacteristics(camId).get(
+                    CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL
+                )
+            } catch (_: Exception) {
+                null
+            }
+            Log.i(
+                "CamPerf",
+                "open facing=" + currentFacing + " hwLevel=" + when (level) {
+                    CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY -> "LEGACY"
+                    CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED -> "LIMITED"
+                    CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL -> "FULL"
+                    CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3 -> "LEVEL_3"
+                    CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_EXTERNAL -> "EXTERNAL"
+                    else -> level?.toString() ?: "?"
+                } + " req=" + currentWidth + "x" + currentHeight + "@" + currentFps
+            )
             var bestFit: Range<Int>? = null
             var bestFitWidth = Int.MAX_VALUE
             var fastest: Range<Int>? = null

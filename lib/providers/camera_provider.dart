@@ -369,6 +369,10 @@ class CameraProvider extends ChangeNotifier {
           //（理由见 previewFrame 字段注释：整页重建是主线程 1.66 核的元凶）。
           previewFrame.value = jpeg;
         }
+        // 【v3.8.5】记一帧，供自适应降档统计真实出帧率（窗口满 3 秒才判断一次，
+        // 平时这里只是两个整数自增/比较，代价可忽略）。
+        _fpsWinFrames++;
+        unawaited(_maybeAdapt());
       }
     };
 
@@ -957,6 +961,127 @@ class CameraProvider extends ChangeNotifier {
     _previewThrottleMs = (1000 ~/ _selFps).clamp(42, 100);
   }
 
+  // ── v3.8.5 自适应降档：按【实测帧率】挑这台机器真跑得动的档 ──────
+  // 背景（都是实测，不是推测）：Redmi 4X / 骁龙 435 上，App 下发了 AE 区间
+  // (30,30)、模板已换成 RECORD、conv 从 44ms 优化到 8.8ms、4 条压缩车道理论
+  // 吞吐 50fps 且 drop=0 —— 相机依然稳定只给 ~10fps。也就是说：瓶颈在相机
+  // HAL，【不在我们任何一行代码里】，再优化采集侧也不会让画面更流畅。
+  //
+  // 而这类老 HAL 通常有一个"像素吞吐上限"（10fps × 69 万像素 ≈ 7M 像素/秒）：
+  // 分辨率降一档，帧率就能换上来。所以这里做【实测驱动】的自动降档：
+  // 统计真实出帧率，低于"人眼连贯"阈值就降一档，降完再验一次 ——
+  // 没变快就说明瓶颈不在分辨率，立刻退回原档并不再折腾。
+  //
+  // ⚠ 这不是"替设备做主"：判据是这台机器【自己跑出来的帧率】，不是代码
+  // 拍脑袋猜的档位，符合"档位只能来自设备"的铁律。
+  static const int _kSmoothFps = 24; // 人眼连贯阈值：24fps（电影帧率）
+  bool _adaptWarmup = true;     // 刚开完相机的第一个统计窗口作废（含重启抖动）
+  int _adaptTries = 0;          // 已降档次数（上限 3，防止一路降到最低档）
+  bool _adaptVerifying = false; // 正在验证上一次降档有没有真的变快
+  bool _adaptDisabled = false;  // 验证失败后彻底停手（别来回折腾相机）
+  double _fpsBefore = 0;        // 降档前实测帧率，用于验证是否变快
+  int _prevW = 0, _prevH = 0, _prevFps = 0; // 降档前的档位，验证失败时退回
+  int _fpsWinStartMs = 0;       // 统计窗口起点
+  int _fpsWinFrames = 0;        // 窗口内收到的帧数
+
+  /// 开一个全新的统计窗口（相机刚启动 / 刚换档时调用）
+  void _resetFpsWindow() {
+    _fpsWinStartMs = DateTime.now().millisecondsSinceEpoch;
+    _fpsWinFrames = 0;
+    _adaptWarmup = true; // 刚重启的第一个窗口含抖动，丢弃
+  }
+
+  /// 每次会话彻底结束（回到 idle）时把自适应状态全部归零，
+  /// 下次重新开摄像头时重新评估（环境/温度变了，结论可能不同）。
+  void _resetAdaptState() {
+    _adaptWarmup = true;
+    _adaptTries = 0;
+    _adaptVerifying = false;
+    _adaptDisabled = false;
+    _fpsBefore = 0;
+    _prevW = _prevH = _prevFps = 0;
+    _fpsWinStartMs = 0;
+    _fpsWinFrames = 0;
+  }
+
+  /// 在当前镜头的档位表里找【比当前小一档】的档（面积最接近但严格更小）。
+  /// 找不到（已经是最小档）返回 null —— 那就没什么可降的了。
+  CamSizeCaps? _smallerProfile() {
+    final sizes = lensSizes;
+    if (sizes.isEmpty) return null;
+    final curArea = _selWidth * _selHeight;
+    CamSizeCaps? best;
+    for (final s in sizes) {
+      if (s.width * s.height >= curArea) continue;
+      if (best == null || s.width * s.height > best.width * best.height) best = s;
+    }
+    return best;
+  }
+
+  /// 每来一帧调一次；攒够 3 秒算一次实测帧率，必要时自动降档。
+  Future<void> _maybeAdapt() async {
+    if (_adaptDisabled) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (_fpsWinStartMs == 0) {
+      _resetFpsWindow();
+      return;
+    }
+    final elapsed = now - _fpsWinStartMs;
+    if (elapsed < 3000) return; // 窗口没满，不判断
+    final measured = _fpsWinFrames * 1000.0 / elapsed;
+    _fpsWinStartMs = now;
+    _fpsWinFrames = 0;
+    if (_adaptWarmup) {
+      _adaptWarmup = false;
+      return; // 第一个窗口（重启抖动）不算数
+    }
+    debugPrint('[CamAdapt] 实测 ${measured.toStringAsFixed(1)}fps'
+        ' / 目标 $_selFps fps @ $_selWidth×$_selHeight');
+
+    if (_adaptVerifying) {
+      // 上一步刚降过档，现在看降档到底有没有换到帧率
+      _adaptVerifying = false;
+      if (measured < _fpsBefore * 1.15) {
+        // 降了分辨率却没变快 → 瓶颈不在分辨率（可能是 HAL 硬性限流），
+        // 那就没有理由牺牲画质，退回原档并停手。
+        debugPrint('[CamAdapt] 降档无效'
+            '（${measured.toStringAsFixed(1)} vs 降档前 ${_fpsBefore.toStringAsFixed(1)}），回退');
+        _selWidth = _prevW;
+        _selHeight = _prevH;
+        _selFps = _prevFps;
+        _adaptDisabled = true;
+        _syncPreviewThrottle();
+        await _applyProfileChange();
+      }
+      return;
+    }
+
+    if (_state != CamState.live) return;
+    if (measured >= _kSmoothFps) return; // 已经够连贯，不动
+    if (_adaptTries >= 3) return;
+    final next = _smallerProfile();
+    if (next == null) {
+      _adaptDisabled = true; // 已经是最小档，没得降
+      return;
+    }
+    _prevW = _selWidth;
+    _prevH = _selHeight;
+    _prevFps = _selFps;
+    _fpsBefore = measured;
+    _adaptTries++;
+    _adaptVerifying = true;
+    _selWidth = next.width;
+    _selHeight = next.height;
+    _selFps = next.maxFps.clamp(1, 240);
+    // 标记成"手动档"：否则切镜头时 _pickBestProfile 会自作主张跳回最高档，
+    // 那我们刚降下来的档就白降了。
+    _autoProfile = false;
+    _syncPreviewThrottle();
+    debugPrint('[CamAdapt] 降档 ${_prevW}×${_prevH} → '
+        '$_selWidth×$_selHeight（第 $_adaptTries 次）');
+    await _applyProfileChange();
+  }
+
   // ── v3.4.4 手动画质档 ──────────────────────────────────────────
   // true  = 自动挑选（能力探测后取最高档，原有行为）
   // false = 用户在界面上手动指定的档位
@@ -1023,6 +1148,9 @@ class CameraProvider extends ChangeNotifier {
   // 结尾一次把"相机真的重启完了"的最终状态铺给界面（中间是耗时操作）。
   Future<void> _applyProfileChange() async {
     notifyListeners();
+    // 【v3.8.5】换档 = 相机要重启（或至少重登记），统计窗口必须重开：
+    // 刚重启那 3 秒帧率不稳（含黑屏期），拿它判断会误降档。
+    _resetFpsWindow();
     // 【v3.8.3】档位未知时不许拿 0×0@0 去开相机 / 登记会话。
     // 正常流程到不了这里（进待命时已经拦过一道），这里是防"以后有人新增调用点"。
     if (!profileKnown) return;
@@ -1230,6 +1358,9 @@ class CameraProvider extends ChangeNotifier {
     // 见 network_service.dart 的解析分支，两个方向共用同一个 type 靠字段区分。
     await _cameraService.stop();
     await _cameraService.stopGuardService();
+    // 【v3.8.5】会话彻底结束 → 自适应结论归零。下次重新开摄像头会重新评估
+    //（环境亮度、机身温度都变了，这次"降档无效"不代表下次也无效）。
+    _resetAdaptState();
     // 下面这一段是"回到出厂账面"：五个字段逐一清回初始值。
     // 为什么连 _muted 也要清：下次用户重新启用时，应当是全新一次开始，
     // 不能带着上次的冻结残留（他会以为还是活的，其实画面停着）。
