@@ -40,10 +40,34 @@ void main() {
 
   // 【第二步：启动应用】
   // runApp() 接收一个 Widget（界面组件），它会渲染到手机屏幕上。
+  // 更准确地说：runApp 把这个 Widget 挂成"界面树"的根节点，触发第一次
+  // 布局-绘制，并从此驱动整个 App。一个程序只调用它一次。
   // 这里最外层包了一个 MultiProvider，意思是：
   // "在启动界面前，先把下面这几个服务对象注册到全局仓库中"。
+  //
+  // 【关于 SharedPreferences（本地存储）与启动顺序】
+  // 很多教程把 main() 写成 async 并先 await 读本地存储再 runApp。
+  // 本项目刻意选了另一条路：main() 保持同步、界面第一时间起来；
+  // 需要存档的 Provider（LanguageProvider / DeviceProvider 的 _load()）
+  // 在构造时自己发起异步读取，读到旧档后 notifyListeners()，
+  // 相关界面自动重建一次、显示真正的档位。两种做法都对，区别是：
+  //   先 await 再 runApp —— 首帧即最终状态，代价是启动多等一次磁盘；
+  //   先 runApp 后异步恢复 —— 启动最快，极短时间内可能先看到默认值
+  //                        （如语言默认"跟随系统"）再刷新成存档值。
+  // 但无论选哪条，上面的 ensureInitialized() 都必须排在所有事情之前：
+  // SharedPreferences 这类插件底层靠"平台通道(platform channel)"跟原生
+  // 代码通信，而通道要等 Binding 初始化完成后才存在——顺序反了直接抛异常。
   runApp(
     MultiProvider(
+      // providers 列表就是"挂到树上"这个动作本身：
+      // MultiProvider 是语法糖，等价于把 6 个 Provider 一层套一层地
+      // 包在 PCSpeakerApp 外面（第一个写在最外层）。每个 Provider 往
+      // Widget 树里塞一个"仓库节点"，之后的任何后代 Widget 都能顺着
+      // 自己的 context 沿祖先链往上找到对应类型的服务，并且全 App
+      // 拿到的都是同一个实例（单例效果）。
+      // ChangeNotifierProvider 再多做一步：它监听内部对象的
+      // notifyListeners()，一旦触发就把"订阅了它的子孙"重新 build，
+      // 这就是"状态挂在树上、数据驱动界面"的完整链路。
       providers: [
         // --------------------------------------------------------------------
         // 服务 0：界面语言（v3.7 国际化新增）
@@ -51,6 +75,11 @@ void main() {
         // 放在最前面只是阅读顺序上的考虑：它是"跟业务无关的全局偏好"。
         // 构造时抓一份系统语言的快照，之后从 SharedPreferences 恢复
         // 用户手动选过的档位（auto / en / zh）。
+        // 为什么"跟随系统"和"手动选择"要并存？
+        //   纯跟随系统：手机是德语而 App 只有中英两套文案时，用户没有自救入口；
+        //   纯手动：新装 App 时界面语言和手机系统对不上，体验差。
+        //   所以默认走 auto（=跟随系统，locale 传 null 让 Flutter 自己匹配），
+        //   同时永远保留 en/zh 两档手动覆盖 —— 用户的选择存本地、重启还认。
         // 用 ChangeNotifierProvider：用户改语言 → notifyListeners →
         // app.dart 里的 Consumer 重建 MaterialApp → 全 App 换语言。
         ChangeNotifierProvider<LanguageProvider>(

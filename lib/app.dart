@@ -22,6 +22,8 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 // 由 lib/l10n/*.arb 在构建期自动生成的文案类（flutter: generate: true）。
 // 手写代码里永远不要改这三个 app_localizations*.dart —— 它们每次构建都会被覆盖。
+// 生成工具是 `flutter gen-l10n`：源文件只有 app_en.arb / app_zh.arb 两个人写文件，
+// 要改任何一句界面文案，改对应的 .arb 再重新生成，改生成的 .dart 等于白改。
 import 'l10n/app_localizations.dart';
 
 import 'providers/language_provider.dart';
@@ -97,6 +99,13 @@ class PCSpeakerApp extends StatelessWidget {
           // ColorScheme.fromSeed：只需给一个"种子色"（这里是蓝色），
           // Material 3 会自动推导出整套协调的配色方案（主色、辅色、背景色等），
           // 不用手动逐个定义颜色，这是 Material 3 的核心特性。
+          // 想改全局样式往哪儿改？就在下面 ThemeData 的参数里加：
+          //   · 换主色 → 改 seedColor；逐个指定颜色 → 覆盖 colorScheme 的参数
+          //   · 全局字号/字体 → textTheme（headline/body/label 各级）
+          //   · 卡片圆角/阴影 → cardTheme；对话框 → dialogTheme
+          // 本项目目前只用种子色推导、没有逐项覆盖，所以两套主题写得很薄；
+          // 个别页面里的圆角（如 device_gate.dart 的 BorderRadius.circular）
+          // 是组件局部样式，不走全局主题。
           theme: ThemeData(
             colorScheme: ColorScheme.fromSeed(
               seedColor: Colors.blue,
@@ -121,6 +130,16 @@ class PCSpeakerApp extends StatelessWidget {
 
           // home：App 启动后显示的第一个页面。
           // 页面内部自己会再套一个 Scaffold（脚手架），见 home_screen.dart
+          //
+          // 【路由写法说明（初学者常问）】MaterialApp 挂页面有三种方式：
+          //   ① home: —— 只声明唯一起点页，本项目用的就是这种（不是
+          //      MaterialApp.router，也没有写 routes 名字表）；
+          //   ② routes: {'/xxx': builder} —— 页面多、跳转不带复杂参数时方便；
+          //   ③ MaterialApp.router + go_router —— 大项目/深链接才值得上。
+          // 页面跳转入口在首页：home_screen.dart 里点设备入口卡时用
+          // Navigator.push(context, MaterialPageRoute(builder: ...))
+          // 把对应的设备详情页"压"进路由栈，系统返回键自动弹回首页，
+          // 因此根这里无需登记任何路由表。
           home: const HomeScreen(),
         );
       },

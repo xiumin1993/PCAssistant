@@ -15,6 +15,21 @@
 //   · 大圆形"启用/停止"按钮、红色"启用摄像头"按钮。
 // 同样地，删的是开关入口，前台保活服务改为常驻（否则息屏后进程被回收，
 // 电脑再也唤不起手机相机）。
+//
+// 【给初学者的阅读指引】
+// · 本文件一共 3 类组件：StatelessWidget（CameraScreen、_PreviewCard）和
+//   一个 StatefulWidget（_FullscreenPreviewScreen）。
+//   Stateless = 组件自己不存可变数据，"数据变 → 整件被换新的重画"；
+//   Stateful = 组件有生命周期（initState 进场跑一次、dispose 退场跑一次），
+//   只在组件自己必须"记住点什么 / 进场做收尾做什么"时才用（全屏页要
+//   进页面改横屏、退页面恢复竖屏，这就是非记不可的东西）。
+// · 驱动本页的数据全住在 CameraProvider（lib/providers/camera_provider.dart，
+//   那里已有逐字段注释，本文件只讲界面自己的事）。本页只做三件事：
+//   用 Consumer 订阅变化、在 build 里读 provider 的 getter、在按钮回调里
+//   调 provider 的方法 —— 界面从不"自己动手改画面"。
+// · 启用摄像头有两条入口：入口 A = 本页/首页的开关（用户主动开守护）；
+//   入口 B = PC 推 cam_request → 手机弹出"同意横幅"，用户点同意才登记会话。
+//   横幅画在 home_screen.dart（不在本页），它是隐私底线：手机绝不替用户点头。
 // ============================================================================
 
 import 'dart:io' show Platform; // Platform.isIOS —— iOS 特有限制的提示显隐
@@ -23,6 +38,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // SystemChrome 控制全屏方向/系统栏
 import 'package:provider/provider.dart';
 
+// AppLocalizations 由 Flutter 的 gen_l10n 工具从 lib/l10n/app_zh.arb /
+// app_en.arb【自动生成】lib/l10n/app_localizations*.dart 三个文件。
+// 那三个 dart 文件是构建产物：绝对不要手改，改句子要改 .arb 再重新生成。
+// 本项目生成的 AppLocalizations.of(context) 内部已判空写死（带了 !），
+// 所以界面里取出来后可以直接点方法调用，不用再补一个 !。
 import '../l10n/app_localizations.dart';
 import '../providers/camera_provider.dart';
 import '../providers/device_provider.dart';
@@ -30,20 +50,40 @@ import '../widgets/device_gate.dart';
 
 /// 摄像头模式页
 class CameraScreen extends StatelessWidget {
+  // StatelessWidget：本页没有任何可变字段 —— 状态词、预览帧、档位表全部
+  // 读自 CameraProvider。组件唯一的职责就是 build()：把"此刻的数据"翻译成
+  // "此刻的 UI"。数据一变，框架会重新跑一遍 build 生成新界面 —— 你永远
+  // 不需要（也没有 setState 可用）去"手动改某个控件的文字/颜色"。
   const CameraScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // 顶栏的 DevicePageTitle 是共用组件（lib/widgets/device_gate.dart）：
+      // 状态胶囊的五档词（对摄像头 = 已禁用/未连接/待电脑请求/待命/取景中）
+      // 与配色由 DeviceProvider.statusOf/statusLabelOf 统一算 —— 和首页卡片
+      // 同一本账本，绝不会出现两处说法不一致。本页不用为此写一行判断。
       appBar: AppBar(
         title: const DevicePageTitle(device: PcDevice.camera),
         centerTitle: true,
       ),
+      // 订阅 Provider 数据的三种写法，取舍记一遍（本页用第一种）：
+      //   Consumer<T>(builder:) —— 被包住的整棵子树都随 notifyListeners 重建。
+      //     本页整屏内容几乎都被 CameraProvider 驱动，包一层最省事；
+      //   context.watch<T>()   —— 等价能力但粒度更细：只重建调用它的那个
+      //     子 widget，适合"一页里只有一小块跟数据走"的场景；
+      //   context.read<T>()    —— 只取实例、【不建立监听】：专用于按钮回调
+      //     这类"点一下调个方法就走"的场合，在 build 里调用是反模式。
+      // builder 的第二个参数 provider 就是最新的 CameraProvider 实例，
+      // 所以本页子树里读数据直接用 provider.xxx，三个写法这里都不额外出现。
       body: Consumer<CameraProvider>(
         builder: (context, provider, child) {
           // l10n：当前语言的文案表，整页取一次往下传
           final l10n = AppLocalizations.of(context);
           final state = provider.state;
+          // isLive = "相机硬件真的开着"（CamState.live）。REC 红横幅、
+          // 参数角标、冻结按钮的样式全都挂在这个布尔上 —— 界面不猜硬件状态，
+          // 只如实转述 provider 说的。
           final isLive = state == CamState.live;
           // 错误提示：Provider 里只存"错误键 + 原始细节"，到这里才翻成人话
           final errorText = provider.errorOf(l10n);
@@ -69,6 +109,13 @@ class CameraScreen extends StatelessWidget {
           // 待命/未连接都放开 —— 用户原话："我理解任何时候都可以修改摄像头清晰度"。
           final paramsLocked = !provider.enabled;
 
+          // 布局最外三层（先看清骨架，后面所有块都塞在 Column 里往上叠）：
+          //   Center              —— 内容不满一屏时把整列居中（平板/横屏好看）；
+          //   SingleChildScrollView —— Column 自己不会滚动！内容总高度一旦超过
+          //     屏幕，Column 会直接甩 RenderFlex overflow 报错（黄黑条纹）。
+          //     套上滚动视图后"超出"变成"可滑动"，永远不会溢出报错；
+          //   Column(stretch)     —— 竖着排子项，stretch = 每个子项横向撑满，
+          //     卡片才不会缩成内容那么宽。
           return Center(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(20),
@@ -76,6 +123,9 @@ class CameraScreen extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   // ============ ① 取景预览卡（永远在最上方）============
+                  // previewJpeg 就是"最新一帧的完整 JPEG 字节"（Uint8List?），
+                  // 由 CameraService 采集、CameraProvider 缓存后递下来给
+                  // Image.memory 显示 —— 解码与逐帧刷新节奏见 _PreviewCard 头注。
                   _PreviewCard(
                     previewJpeg: provider.previewJpeg,
                     isLive: isLive,
@@ -98,6 +148,17 @@ class CameraScreen extends StatelessWidget {
                   const SizedBox(height: 16),
 
                   // ============ ②' 缺权限提示（系统授权，不是功能开关）========
+                  // 运行时权限的真实链路（本项目【没有】用 permission_handler 之类的
+                  // 包，是自己经平台通道向 Android 要权限）：
+                  //   按"授予权限" → provider.toggle() → CameraService.ensurePermission()
+                  //   → MethodChannel requestCamPermission → Android 弹系统授权窗，
+                  //   Dart 端的 await 会一直挂到用户点"允许/拒绝"才有返回值。
+                  // 用户拒绝后界面上留下什么：这条琥珀色横幅一直在
+                  //   （needsPermission 保持 true），外加下方一行红色错误字（②''）。
+                  // 为什么"刚授权完必须把开硬件的流程整个重走一遍"：之前那次因缺权限
+                  //   失败的打开请求早就以 PERMISSION_DENIED 返回了，系统事后放行并不
+                  //   会让它自动重试 —— 只能重新调一次"查权限→登记会话→等唤醒开相机"
+                  //   的完整流程。所以这个按钮调的是 toggle()，而不是把横幅藏掉了事。
                   if (provider.needsPermission && provider.enabled) ...[
                     Container(
                       padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
@@ -168,6 +229,14 @@ class CameraScreen extends StatelessWidget {
                                   fontSize: 13, color: Colors.black38),
                             )
                           else
+                            // DropdownButton 新手解剖：items = 选项清单，每项带
+                            // 一个内部标识 value 和显示用的 child widget；
+                            // value = 当前选中项，它【必须能在 items 里找到】，
+                            // 找不到框架直接抛断言错误（所以上面 qualityValue 才有
+                            // "找不到就回落 'auto'"的保护）；
+                            // onChanged = 选中后的回调。传 null 就是整只控件置灰
+                            // 不可点 —— Flutter 控件的通用禁用手法（下面
+                            // 镜头/旋转按钮、麦克风页 SegmentedButton 同一套路）。
                             DropdownButton<String>(
                               isExpanded: true,
                               // 选中项标识（'auto' 或档位下标）
@@ -184,6 +253,10 @@ class CameraScreen extends StatelessWidget {
                                     child: Text(
                                       // maxFps 上限截到 30：虚拟摄像头吃不下更高，
                                       // 且手机宣称 60fps 的档位实际跑不稳
+                                      // 注意没有单独的"帧率"控件：每一档自带 maxFps，
+                                      // 选中后由 provider 取 min(该档上限, 30) 当当前
+                                      // fps（见 CameraProvider.selectProfile），
+                                      // 界面只展示这一对绑定的结果。
                                       '${sizes[i].width}×${sizes[i].height} @ ${sizes[i].maxFps.clamp(1, 30)}fps',
                                       style: const TextStyle(fontSize: 14),
                                     ),
@@ -211,6 +284,11 @@ class CameraScreen extends StatelessWidget {
                           // 以前相机没开就置灰，理由是"切镜头只对正在取景有意义"。
                           // 这是错的：待命时预设好镜头，等电脑一唤醒就直接用对的镜头，
                           // 用户不该为了一次预设去手动开相机。
+                          // 按钮只是把意图递进去：onPressed 调 provider.switchLens()/
+                          // rotateManual90()，差异全由 provider 消化 —— 取景中会让原生
+                          // stop→start 立刻换镜头；待命/未连接只翻转"想要哪颗"的意图位
+                          // 并重发登记（硬件本来关着，没东西可切）。界面不分状态写代码，
+                          // 这正是"任何状态都能改参数"能成立的底气。
                           Row(
                             children: [
                               Expanded(
@@ -248,6 +326,12 @@ class CameraScreen extends StatelessWidget {
                   // ============ ④ 冻结画面（临时，会话保留）============
                   // 和禁用滑块的分工：禁用 = 拆掉这条链路；冻结 = 画面停住不动，
                   // 电脑那边的虚拟摄像头还存在。只有会话在（非 idle）时才有意义。
+                  // provider.isMuted 决定画哪只按钮：红色填充"已冻结"（再按解冻）/
+                  // 描边"冻结画面"；两只按钮的 onPressed 都调同一个 toggleMute() ——
+                  // 按钮自己不判断"这次是冻还是解"，状态只存 provider 一处，界面就不会骗人。
+                  // 外层 SizedBox(height: 48) 是定高约束：按钮组件倾向于尽量撑满
+                  // 给到的空间，在按内容定高的 Column 里裸奔可能触顶或溢出，
+                  // 钉死 48 让它老实待着。
                   if (state != CamState.idle)
                     SizedBox(
                       height: 48,
@@ -312,6 +396,25 @@ class CameraScreen extends StatelessWidget {
 // Image.memory：把 JPEG 字节直接解码显示（Flutter 内置解码器）。
 //   gaplessPlayback: true —— 新帧到达前继续显示旧帧，预览不闪黑。
 // previewJpeg 为 null（未开相机）→ 显示灰色占位：相机硬件真的没开。
+//
+// Image.memory 再讲透一点（初学者）：它在内部把 Uint8List 包成 MemoryImage
+// 这个 ImageProvider，交给 Flutter 自带的编解码器解码成一张 GPU 纹理再上屏
+// —— 不需要临时文件、不走网络。每次 Consumer 重建时传进来的是"最新一帧"，
+// Image 发现字节换了就换图，gaplessPlayback 保证换的瞬间仍显示旧图。
+// 每帧刷新的节奏由 Provider 端决定：CameraProvider 里有一道 100ms 的
+// 时间戳闸门（_lastNotifyMs）才 notifyListeners，界面最多 10fps。
+// 为什么不能每帧都 notifyListeners：相机一秒可出 30 帧，一帧刷一次 =
+// 一秒重建整页 30 次，CPU 全烧在重画界面上，手机发热耗电、预览反而卡；
+// 10fps 人眼看着已经连贯。⚠ 注意节流只影响【手机自己的预览】——
+// 发给 PC 虚拟摄像头的帧是逐帧走的，不受这里拖累。
+// 黑底取景框的层级（从外到内念一遍就知道为什么这么排）：
+//   ClipRRect（把圆角裁出来，子组件溢出圆角的部分被剪掉）
+//   → ColoredBox 黑底（图片按 contain 显示时上下/左右的留白也是黑的，像取景器）
+//   → GestureDetector（整卡点按进全屏）
+//   → Column [REC 红横幅（仅 live 时出现）, Stack 取景窗]
+//   Stack 里：AspectRatio(4:3) 铺底定出取景窗，Positioned 把角标钉在角落。
+//   本卡片没有用 FittedBox——缩放是交给 Image 自己的 fit: BoxFit.contain
+//   （完整显示不裁切，留黑边）；全屏页则换成 cover（铺满屏，超出部分裁掉）。
 // ============================================================================
 class _PreviewCard extends StatelessWidget {
   final Uint8List? previewJpeg;
@@ -456,6 +559,13 @@ class _PreviewCard extends StatelessWidget {
 //      划一下可临时唤出，松手自动收回，不打扰取景）。
 // 因此它是 StatefulWidget —— 只有组件有"进场设置、退场恢复"这种
 // 生命周期需求（在 build 里做副作用是 Flutter 大忌）。
+// 生命周期时间轴（新手必背）：
+//   createState() → initState()（恰好一次：进页改横屏/藏系统栏就在这里做）
+//   → build()（【很多次】：父级重建、Consumer 刷新都会再跑 —— 一次性副作用
+//     写在 build 里会被反复执行，这就是"大忌"的原因）
+//   → dispose()（恰好一次：把 initState 做的事原样撤销，不然退出全屏后
+//     整个 App 都被卡在横屏+隐藏系统栏的状态）。
+// 本文件其余组件都是 StatelessWidget —— 它们没有"自己要记的东西"。
 // ============================================================================
 class _FullscreenPreviewScreen extends StatefulWidget {
   const _FullscreenPreviewScreen();
@@ -494,10 +604,15 @@ class _FullscreenPreviewScreenState extends State<_FullscreenPreviewScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
+      // 全屏页同样整页包在 Consumer 里：预览帧按 100ms 节流推来一次
+      // notifyListeners，这里就重建一次，Image.memory 换上新帧 —— 和主页面同法。
       body: Consumer<CameraProvider>(
         builder: (context, provider, child) {
           final l10n = AppLocalizations.of(context);
           final jpeg = provider.previewJpeg;
+          // Stack = 叠放：非 Positioned 的子组件从底铺起，Positioned 的钉角落。
+          // fit: StackFit.expand 让打底的那张图（Image/占位）自动撑满整屏，
+          // 不用自己算屏幕宽高。
           return Stack(
             fit: StackFit.expand,
             children: [
@@ -512,6 +627,9 @@ class _FullscreenPreviewScreenState extends State<_FullscreenPreviewScreen> {
               // 注意：Positioned 必须是 Stack 的【直接】子组件，
               // 不能包 SafeArea/Padding（那会让它找不到 Stack 父级，
               // release 模式整页渲染成灰块 —— v3.4.1 首版踩过的坑）。
+              // 那怎么避刘海？自己量：MediaQuery.of(context).padding 就是
+              // 四边安全区 inset（刘海/圆角/状态栏/小白条各占多少），
+              // top 往下让出 padding.top、bottom 往上让出 padding.bottom。
               if (provider.isLive)
                 Positioned(
                   top: MediaQuery.of(context).padding.top + 8,

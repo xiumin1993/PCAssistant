@@ -10,6 +10,12 @@
 //   预览面板就能在画廊里找到并渲染它。
 //
 //   这个文件只服务于预览工具，不影响正式运行（main.dart 才是入口）。
+//
+// 初学者要不要管它？—— 不用。它不参与正式 App 的编译产物，改首页 UI 时
+// 也不需要动这里；只有当你在 Android Studio 右侧打开 Flutter Widget
+// Preview 面板、想可视化预览首页时才和它打交道。若将来 HomeScreen 新增
+// 了 Provider 依赖、预览报"找不到 Provider"，来这个文件的 providers
+// 列表里补同款注册即可（与 main.dart 保持一致）。
 // ============================================================================
 
 import 'package:flutter/material.dart';

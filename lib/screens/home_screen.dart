@@ -20,6 +20,26 @@
 //                     └─ _DeviceCard ×3    音响 / 麦克风 / 摄像头 详情页入口
 //
 // 阅读嵌套结构的技巧：从最外层往里剥，一层只做一件事。
+// ----------------------------------------------------------------------------
+// 新手课前速成：Widget 是什么、build 什么时候被重新调用（先读这段再看代码）
+// ----------------------------------------------------------------------------
+// Widget 其实不是"画界面的东西"，而是一份【不可变的描述对象】：
+//   它只描述"界面此刻应该长什么样"，真正画像素的是 Flutter 引擎。
+//   所以"重建"整棵 Widget 树非常廉价（不过是新写了一份描述），
+//   这也是 Flutter 的写法永远是"从当前数据生成界面"，
+//   而不是像老式 UI 框架那样"找到控件、手动改它的内容"。
+// 两种 Widget（本文件正好各有一个例子）：
+//   StatelessWidget —— 自身没有可变字段，界面完全由"入参 + Provider 状态"决定。
+//                     本文件的 HomeScreen 及以下所有 _开头的小组件都是。
+//   StatefulWidget  —— 有随时间变化的内部状态，住在配套的 State 对象里，
+//                     改完状态调 setState() 才重画自己。文件末尾的 PulsingDot 就是。
+// build() 何时被重新调用：首帧一次；此后只要祖先 Widget 重建、订阅的 Provider
+//   调了 notifyListeners()、或自己 setState()，引擎就可能再跑一遍 build。
+//   重跑的【时机和次数由引擎决定】，你自己控制不了。
+// 因此铁律：build / builder 里只能【读数据、拼 Widget】，不许有副作用——
+//   不发网络请求、不起 Timer、不写存储、不改 Provider。否则重建一次
+//   等于把这些动作又执行一遍，会出现"没点按钮却发了一次请求"这种怪事。
+//   副作用放进事件回调（onTap 之类）或 StatefulWidget 的生命周期方法里。
 // ============================================================================
 
 import 'dart:io' show Platform; // Platform.isAndroid/isIOS —— 平台差异显隐用
@@ -56,6 +76,12 @@ import '../widgets/language_sheet.dart';
 /// 首页。
 /// 用 StatelessWidget 就够：所有会变的都住在 Provider 里，
 /// 本 Widget 只负责"根据 Provider 当前状态生成界面"。
+///
+/// 顺便对比 setState(() {...}) —— StatefulWidget 的刷新开关：
+///   把"改字段的动作"包进回调里交给 setState，框架改完值后就知道
+///   "这个组件脏了，要重跑它的 build"，界面随数据更新。
+///   本页一个自己的字段都没有，刷新职责全部交给 Consumer（见下面 body）：
+///   Provider 的 notifyListeners() 就相当于"在订阅者群里挨个喊 setState"。
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
@@ -72,11 +98,17 @@ class HomeScreen extends StatelessWidget {
       onPopInvokedWithResult: (didPop, result) {
         if (!didPop) {
           // didPop=false 说明系统真的没退出，这里接管按键
+          // 这里用 context.read 的时机值得记：onPopInvoked 是【事件回调】不是 build，
+          // 回调里"拿对象用一下、不订阅"就该用 read；
+          // 反过来 watch 只能在 build 期间调用（provider 包会检查这一点）。
+          // 约定：回调里只 read，build 里要刷新用 Consumer/watch。
           context.read<AudioService>().goHome();
         }
       },
       // Scaffold：页面"脚手架"，提供 Material 页面的标准结构——
       // 顶部栏(appBar)、主体(body)、底部栏、浮动按钮等插槽。
+      // 布局链从这里开始：appBar 钉在顶部（高度自管、自动避开状态栏），
+      // body 拿走剩下整块 —— 下面所有东西都塞在 body 这一块里。
       child: Scaffold(
         // ---------------- 顶部标题栏 ----------------
         appBar: AppBar(
@@ -87,11 +119,17 @@ class HomeScreen extends StatelessWidget {
           // 右上角"语言"入口：点开底部弹层选 跟随系统 / English / 简体中文。
           // 放 AppBar 而不是塞进某个设备页，是因为它是【全局】设置，
           // 和具体哪台设备无关。
+          // actions 是 AppBar 的"右侧按钮槽"（Widget 列表，从右往左排）。
           actions: [
             IconButton(
               // tooltip 是长按/悬停提示，也是读屏软件念出来的名字（无障碍必给）
               tooltip: AppLocalizations.of(context).languageTitle,
               icon: const Icon(Icons.language),
+              // showLanguageSheet（widgets/language_sheet.dart）内部就是
+              // showModalBottomSheet：从屏幕底部滑出的模态弹层，盖住页面、
+              // 点外部收起。它返回 Future<void>，"弹层关闭时"才完成；
+              // 这里不 await（知道了关闭时间也没事做），所以拿到就丢。
+              // 若将来要"等用户选完再做事"，就 await 它、或看它带出的返回值。
               onPressed: () => showLanguageSheet(context),
             ),
           ],
@@ -103,6 +141,14 @@ class HomeScreen extends StatelessWidget {
         //   1. 从 Provider 仓库中取出 ConnectionProvider 实例；
         //   2. 订阅它的变化 —— 每当逻辑层调用 notifyListeners()，
         //      Consumer 就重新执行下面的 builder，界面自动刷新。
+        //   为什么这里"凭空"就能取到 ConnectionProvider：main.dart 把
+        //   MultiProvider 包在 MaterialApp【外层】，注册过的对象是所有页面
+        //   context 的祖先，沿树往上找一定找得到；若注册在 home: 里面，
+        //   AppBar 那层就够不着它了——这就是"provider 必须放最外"的原因。
+        //   Consumer 的等价写法是 build 里 context.watch<ConnectionProvider>()：
+        //   同样订阅、同样触发重建，只是不用把 UI 包进 builder 闭眼；
+        //   而 context.read 取到的值变化后【不会】让本 Widget 重建（不订阅），
+        //   拿它画界面就会出现"数据变了界面不动"的经典坑。
         body: Consumer<ConnectionProvider>(
           // builder 是构建回调：
           //   context —— 当前构建上下文（Widget 在树中的位置）
@@ -111,6 +157,18 @@ class HomeScreen extends StatelessWidget {
           builder: (context, conn, child) {
             // v3.7：界面层取文案表。下面所有给用户看的句子都从 l10n 走，
             // 需要 Provider 帮忙成句时，就把 l10n 当参数传进去。
+            // context 是什么：每个 Widget 构建时都会拿到一个 BuildContext，
+            //   它代表"我在组件树里的位置"。主题、语言表、Provider 全都是
+            //   从 context 出发沿树向上"找祖先"拿到的——所以取 l10n 的时机
+            //   必须在 build 期间（那时 context 正在被使用），不能存成字段复用。
+            // 文案从哪来：AppLocalizations.of(context) 按当前 locale 返回文案表，
+            //   l10n.heroConnected、l10n.appTitle 这些 xxx 全部定义在
+            //   lib/l10n/app_zh.arb / app_en.arb（JSON 键值对，一个 key 一句话）。
+            //   lib/l10n/ 下的 app_localizations*.dart 三个文件是构建期由 arb
+            //   自动生成的——⚠ 绝对不要手改，下次构建就被覆盖；加文案改 arb。
+            //   有的教程写 AppLocalizations.of(context)!.xxx：老版本生成码返回
+            //   可空值要自己加 !（"我保证它不是 null"），本项目这版生成码
+            //   已在 of() 内部加好 !，所以调用处直接 .xxx。
             final l10n = AppLocalizations.of(context);
             // 错误先取成局部变量：判空和显示要用两次，
             // 避免调用两次 errorOf 时中间状态变了（理论上不会，但写法更稳）。
@@ -119,9 +177,24 @@ class HomeScreen extends StatelessWidget {
             return Center(
               // SingleChildScrollView：内容变高后小屏不会溢出（黄黑条纹），
               // 放不下就能滑动。
+              // 什么时候会溢出报错（RenderFlex overflow）：Column/Row 是按
+              //   "给定的剩余空间"排孩子的，内容总高超过屏幕、外面又没套
+              //   滚动容器时，Flutter 塞不下就画黄黑斜条 + 控制台报错。
+              //   套上滚动容器后主轴变成"要多长给多长"，条纹消失。
+              // 为什么用 SingleChildScrollView 而不是 ListView：
+              //   本页是一小串【不同类型】的组件，一次全建出来就行；
+              //   ListView 适合"很多条同结构数据"，它只build看得见的行（懒加载）。
               child: SingleChildScrollView(
                 // padding 放在滚动容器内部：滚到顶/底时内容不会贴死边缘
                 padding: const EdgeInsets.fromLTRB(20, 24, 20, 40),
+                // Column：把孩子沿竖直方向排队。
+                //   主轴=竖直、交叉轴=水平（Row 正好反过来）。
+                //   mainAxisAlignment 管"沿主轴怎么分空间"，
+                //   crossAxisAlignment 管"沿交叉轴怎么对齐"（默认 center）。
+                //   center = 剩余空间上下各分一半。注意：滚动容器里主轴
+                //   "要多长给多长"，压根没有剩余空间，center 实际不生效；
+                //   真正把内容垂直居中靠的是外层 Center（它把比自己矮的
+                //   孩子摆正中，比屏幕高时交回滚动容器处理）。
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -140,6 +213,10 @@ class HomeScreen extends StatelessWidget {
                     //   该模式上次连失败 → 红色 + 感叹号
                     //   其余 → 灰色
                     // 这套规则的数据来源是 conn.statusOf(mode)。
+                    // 再补一遍产品硬规则（写代码的人容易手滑破坏它）：
+                    //   切 Tab 只改"在看哪个模式"这一个字段，
+                    //   既不断开现有连接、也绝不自动发起新连接；
+                    //   连接/断开永远只能由用户点 _ConnectButton 触发。
                     _ModeTabs(conn: conn),
                     const SizedBox(height: 16),
 
@@ -177,6 +254,11 @@ class HomeScreen extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 11,
+                            // Theme.of(context)：从当前位置沿树向上取主题配置。
+                            // colorScheme.error = 主题里"出错色"槽位，
+                            // 想全局改配色去 lib/app.dart 的 ThemeData /
+                            // ColorScheme.fromSeed 的 seedColor 字段，
+                            // 这里跟着主题走、不用逐处手改。
                             color: Theme.of(context).colorScheme.error,
                           ),
                           textAlign: TextAlign.center,
@@ -201,6 +283,9 @@ class HomeScreen extends StatelessWidget {
                       builder: (context, dev, _) {
                         return Column(
                           children: [
+                            // 集合字面量里直接写 for（Dart 的 collection-for）：
+                            // 把 PcDevice 枚举的三个成员逐个展开成三张卡，
+                            // 再配合下面的 if 过滤——比手抄三遍 _DeviceCard 更省。
                             for (final d in PcDevice.values)
                               // 蓝牙 Tab 下跳过摄像头卡片
                               if (!(conn.connectionMode ==
@@ -241,6 +326,14 @@ class _ConnectionHero extends StatelessWidget {
   /// 状态 → 颜色。注意读的是 currentModeStatus（当前 Tab 自己的状态），
   /// 不是全局 isConnected，这样"WiFi 连着、人在 USB 页"时大字说的是 USB，
   /// 和 Tab 颜色严格一致，不会自相矛盾。
+  // 想改配色去哪儿（本页颜色值的三个来源，先记住再翻代码）：
+  //   ① 连接状态色（绿 0xFF0F8A43 / 蓝 0xFF1565C0 / 红 0xFFC62828）——
+  //     直接写在本文件各处的 Color(0xFF......) 里，改哪里的色就搜那个数；
+  //   ② 设备五档状态色——唯一出处是 DeviceProvider.statusColor（providers 层）；
+  //   ③ 主题色（primary/error/outline）——定义在 lib/app.dart 的
+  //     ThemeData.colorScheme（种子色 seedColor 推导），改一处全局跟着变。
+  // 字号(fontSize)/圆角(BorderRadius.circular)/阴影(elevation) 没有集中表，
+  // 全是各组件就地写的字面量，想调样式就搜对应参数名。
   Color _colorFor(BuildContext context, ConnectionStatus s) {
     switch (s) {
       case ConnectionStatus.connected:
@@ -314,6 +407,11 @@ class _ConnectionHero extends StatelessWidget {
 //   因为它只能给"整条"上一个选中色，做不到"每个段各自按自己的连接状态
 //   上色"（WiFi 绿、USB 灰、蓝牙灰 这种组合）。所以这里用
 //   Container + InkWell 手绘：完全掌控每个 Tab 的颜色、图标和下划线。
+// 为什么连 Flutter 自带的 TabBar 也不用？
+//   TabBar 是为"整页切换"设计的：要配 TabController、通常还搭 TabBarView，
+//   切 Tab 会真的换掉一屏内容。而这里的 Tab 只改 ConnectionProvider 里
+//   "在看哪个模式"这一个字段，下方地址区/按钮靠 Consumer 重新 build 换脸，
+//   用不上 TabBar 那套机制，手绘反而更直白、三色并存的上色完全自由。
 // ============================================================================
 class _ModeTabs extends StatelessWidget {
   final ConnectionProvider conn;
@@ -372,6 +470,9 @@ class _ModeTab extends StatelessWidget {
     final l10n = AppLocalizations.of(context); // 模式名要翻（只有"蓝牙"有差异）
 
     // 状态 → 颜色（没连过/从没失败的兜底成中性深灰，避免三个 Tab 全是一片浅灰）
+    // 这里有个 Dart 小语法可学：先只声明 final Color color; 不赋值，
+    // 再由下面 switch 的每个分支必赋一次——"明确赋值"规则允许 final 这样写，
+    // 漏了任何一个分支编译器会报错，比到处各写一份更安全。
     final Color color;
     switch (status) {
       case ConnectionStatus.connected:
@@ -405,9 +506,15 @@ class _ModeTab extends StatelessWidget {
 
     return Expanded(
       // Expanded：让每个 Tab 平分 Row 的宽度
+      // 原理（"剩余空间"概念）：Row 先给不带 Expanded 的孩子排掉它们
+      // 要占的宽度，把剩下的宽度按 flex 比例（默认都=1）分给各 Expanded，
+      // 三个 Tab 因此严格等宽。孩子合计宽度超过可用空间 → 报 flex overflow
+      // （黄黑条纹）；该包 Expanded 不包、又放进无宽度约束的地方 → 直接断言崩溃。
       child: InkWell(
         // onTap 只做一件事：切换"在看哪个 Tab"。
         // conn.setMode 内部绝不含 connect/disconnect —— 这是硬要求。
+        // （产品规则再记一遍：Tab 是"视图过滤器"不是"开关"，
+        //  切 Tab 时物理连接原封不动，连/断只能由下面的连接按钮发起。）
         onTap: () => conn.setMode(mode),
         borderRadius: BorderRadius.circular(9),
         child: AnimatedContainer(
@@ -472,6 +579,8 @@ class _AddressArea extends StatelessWidget {
       case ConnectionMode.wifi:
         return Column(
           children: [
+            // SizedBox 的唯一职责是给孩子的宽度钉死成 320 逻辑像素
+            // （输入区统一宽度、视觉不散到屏幕两边）；它不画任何东西。
             SizedBox(
               width: 320,
               child: TextField(
@@ -602,6 +711,8 @@ class _ConnectButton extends StatelessWidget {
       width: 320,
       height: 50,
       child: FilledButton.icon(
+        // FilledButton.icon：Material 3 的实心大按钮（图标+文字两个槽）。
+        // 底色取主题 colorScheme.primary，想换按钮配色改 lib/app.dart 的种子色。
         // onPressed 传 null 是 Flutter 的"禁用按钮"协议：
         // 只要为 null，按钮自动置灰且不可点。
         onPressed: (blocked || conn.isLoading)
@@ -633,8 +744,14 @@ class _ConsentBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 注意：这是首页里嵌套的第二个 Consumer（外圈订 ConnectionProvider，
+    // 这里订 CameraProvider）。一个组件树可以同时订阅多个 Provider，
+    // 谁 notifyListeners 就只重建谁盖住的那一小块，互不牵连。
     return Consumer<CameraProvider>(
       builder: (context, cam, _) {
+        // 没有待确认请求 → 返回 SizedBox.shrink()：一个"零尺寸"的空占位，
+        // 等于这里什么都不画。比再套一层 Visibility 组件更轻，
+        // 也是 Flutter 里"条件不成立时渲染什么"的惯用答案。
         if (!cam.requestPending) return const SizedBox.shrink();
         final l10n = AppLocalizations.of(context);
         return Container(
@@ -665,6 +782,8 @@ class _ConsentBanner extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 10),
+              // 按钮行：MainAxisAlignment.end = 所有孩子推到主轴（水平）末端，
+              // 于是"忽略/同意"两个按钮贴着横幅右下角排。
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
@@ -720,6 +839,10 @@ class _DeviceCard extends StatelessWidget {
         final color = dev.statusColor(device);
         return SizedBox(
           width: 320,
+          // Card：带圆角和阴影的"纸片"容器。
+          // elevation:1 = 阴影厚度（离桌面多高），数字越大影子越重；
+          // margin: EdgeInsets.zero 是关掉 Card 默认外边距（外间距由
+          // 外层 Padding/SizedBox 统一控制，样式不散装）。
           child: Card(
             margin: EdgeInsets.zero,
             elevation: 1,
@@ -728,10 +851,19 @@ class _DeviceCard extends StatelessWidget {
               // 描边用状态色的浅版：整张卡跟着状态走，扫一眼就知道哪台在干活
               side: BorderSide(color: color.withValues(alpha: 0.35)),
             ),
+            // ListTile：Material 标准"列表行"骨架，四个槽位各管一段：
+            // leading 左图标 / title 主行 / subtitle 副行 / trailing 右箭头。
+            // 自己用 Row 拼也能拼出来，但字号、间距、点按反馈都要手动调，
+            // 用它就全符合 Material 规范。
             child: ListTile(
               onTap: () {
                 // Navigator.push：把详情页"压"进路由栈，返回键可退回首页。
                 // 详情页不传任何数据——它内部用 Consumer 自己去全局仓库取。
+                // push 的返回值是 Future<T?>：详情页被"弹出"时才完成，
+                // T 是详情页带着返回的结果（想等就用 await
+                // Navigator.push<bool>(...)）。这里不需要知道结果，直接丢弃。
+                // MaterialPageRoute：声明这页的转场样式（默认自底向上滑入）；
+                // 它的 builder 在真正入场时才执行，参数 (_) 是新页面的 context。
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => _page()),
                 );
@@ -770,6 +902,9 @@ class _StatusChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
+        // withValues(alpha: 0.12)：按"新不透明度 12%"重新计算这个颜色 →
+        // 得到同色系的浅色打底，状态色文字压在上面不刺眼。
+        // 徽标只借设备状态色的"色相"，深浅由这个 alpha 数控制。
         color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(20),
       ),
@@ -803,6 +938,16 @@ class PulsingDot extends StatefulWidget {
   State<PulsingDot> createState() => _PulsingDotState();
 }
 
+// StatefulWidget 是"_pair 结构"，这里把两个角色说清：
+//   PulsingDot（Widget 配置单）—— 依旧不可变，只存 color/size 入参；
+//   _PulsingDotState（State 仓库）—— 真正住可变数据的地方（动画控制器）。
+//   父级重建 PulsingDot 一百次，createState 也只跑一次，State 跟着组件
+//   一生的起落；字段前的下划线 = 私有命名约定（只在库内可见）。
+// 一个反直觉点：这个 StatefulWidget 全程没调过 setState——
+//   setState(() {改字段}) 是"离散变化"型 State 的通用刷新开关：
+//   它只登记"我脏了"，下一帧 Flutter 重跑本 State 的 build；
+//   而动画每帧都要变，用 AnimationController 驱动 AnimatedBuilder
+//   精确重建那一小块，比 setState 掀翻整个子树划算得多。
 class _PulsingDotState extends State<PulsingDot>
     with TickerProviderStateMixin {
   late final AnimationController _controller = AnimationController(
@@ -822,6 +967,9 @@ class _PulsingDotState extends State<PulsingDot>
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, _) {
+        // widget.size / widget.color：State 里通过 widget 字段读父级传入的
+        // 配置。父级随时可能换参数重建本组件，所以每次现取、不要缓存成
+        // State 字段，否则参数改了界面还画旧的。
         // sin 曲线让"明暗变化"比线性更柔和（0.35~1.0 之间呼吸）
         final t = _controller.value * math.pi; // 0..π 正好走半个正弦波
         final opacity = 0.35 + 0.65 * math.sin(t).abs();
